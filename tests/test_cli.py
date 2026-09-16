@@ -14,8 +14,8 @@ def test_resolve_provider_returns_callable():
     assert callable(fn)
 
 
-def test_valid_providers_contains_all_three():
-    assert set(VALID_PROVIDERS) == {"gemini", "fal", "openai"}
+def test_valid_providers_contains_all_known_providers():
+    assert set(VALID_PROVIDERS) == {"gemini", "fal", "openai", "composite"}
 
 
 import types as builtin_types
@@ -119,6 +119,6 @@ def test_output_path_without_file_uses_output_dir():
 
 def test_output_path_provider_in_filename_for_each_provider(tmp_path):
     f = tmp_path / "v01.txt"
-    for provider in ["gemini", "fal", "openai"]:
+    for provider in VALID_PROVIDERS:
         path = build_output_path(f, provider, "2026-06-04_12-00-00")
         assert provider in path.name

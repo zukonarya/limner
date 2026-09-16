@@ -17,3 +17,6 @@ venv/
 # OS
 .DS_Store
 Thumbs.db
+
+# Claude Code state (may reference private brain-repo paths)
+.claude/

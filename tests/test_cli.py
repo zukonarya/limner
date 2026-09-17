@@ -1,6 +1,6 @@
 import pytest
 import sys
-from providers import resolve_provider, VALID_PROVIDERS
+from logo_generator.providers import resolve_provider, VALID_PROVIDERS
 
 
 def test_resolve_provider_unknown_exits():
@@ -20,7 +20,7 @@ def test_valid_providers_contains_all_known_providers():
 
 import types as builtin_types
 from pathlib import Path
-from generate_logo import resolve_config
+from logo_generator.generate_logo import resolve_config
 
 
 def _make_args(provider=None, file=None, prompt=None, images=None):
@@ -101,7 +101,7 @@ def test_prompt_text_extracted_from_below_separator(tmp_path):
     assert "#" not in prompt
 
 
-from generate_logo import build_output_path
+from logo_generator.generate_logo import build_output_path
 
 
 def test_output_path_with_file_contains_provider_and_stem(tmp_path):

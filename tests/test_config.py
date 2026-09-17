@@ -1,6 +1,6 @@
 from pathlib import Path
 
-from config import resolve_output_dir
+from logo_generator.core.config import resolve_output_dir
 
 
 def test_explicit_override_wins_over_env_and_default(tmp_path, monkeypatch):

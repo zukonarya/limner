@@ -1,6 +1,6 @@
 import pytest
 from pathlib import Path
-from validation import validate_images, get_api_key
+from logo_generator.core.validation import validate_images, get_api_key
 
 # --- validate_images ---
 

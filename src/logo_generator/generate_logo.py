@@ -6,10 +6,10 @@ from pathlib import Path
 
 from dotenv import load_dotenv
 
-from config import resolve_output_dir
-from metadata import parse_header, write_output_metadata
-from providers import resolve_provider
-from validation import get_api_key, validate_images
+from logo_generator.core.config import resolve_output_dir
+from logo_generator.core.metadata import parse_header, write_output_metadata
+from logo_generator.providers import resolve_provider
+from logo_generator.core.validation import get_api_key, validate_images
 
 load_dotenv()
 

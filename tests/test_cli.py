@@ -106,19 +106,19 @@ from generate_logo import build_output_path
 
 def test_output_path_with_file_contains_provider_and_stem(tmp_path):
     f = tmp_path / "v01.txt"
-    path = build_output_path(f, "gemini", "2026-06-04_14-30-00")
+    path = build_output_path(f, "gemini", "2026-06-04_14-30-00", tmp_path)
     assert path.name == "v01_gemini_2026-06-04_14-30-00.png"
     assert path.parent == tmp_path
 
 
-def test_output_path_without_file_uses_output_dir():
-    path = build_output_path(None, "fal", "2026-06-04_14-30-00")
+def test_output_path_without_file_uses_output_dir(tmp_path):
+    path = build_output_path(None, "fal", "2026-06-04_14-30-00", tmp_path)
     assert path.name == "fal_2026-06-04_14-30-00.png"
-    assert path.parent.name == "output"
+    assert path.parent == tmp_path
 
 
 def test_output_path_provider_in_filename_for_each_provider(tmp_path):
     f = tmp_path / "v01.txt"
     for provider in VALID_PROVIDERS:
-        path = build_output_path(f, provider, "2026-06-04_12-00-00")
+        path = build_output_path(f, provider, "2026-06-04_12-00-00", tmp_path)
         assert provider in path.name

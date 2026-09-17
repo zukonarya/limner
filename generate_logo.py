@@ -6,13 +6,12 @@ from pathlib import Path
 
 from dotenv import load_dotenv
 
+from config import resolve_output_dir
 from metadata import parse_header, write_output_metadata
 from providers import resolve_provider
 from validation import get_api_key, validate_images
 
 load_dotenv()
-
-OUTPUT_DIR = Path(__file__).parent / "output"
 
 
 def parse_args():
@@ -45,6 +44,17 @@ def parse_args():
         "prompt",
         nargs="?",
         help="Inline prompt text (mutually exclusive with --file)",
+    )
+    parser.add_argument(
+        "--output-dir",
+        type=Path,
+        default=None,
+        metavar="DIR",
+        help=(
+            "Directory to write generated images to when no prompt file is "
+            "given (default: LOGO_OUTPUT_DIR env var, or ./output relative "
+            "to the current working directory)"
+        ),
     )
 
     args = parser.parse_args()
@@ -83,15 +93,18 @@ def resolve_config(args):
     return provider, images, prompt_text, prompt_file
 
 
-def build_output_path(prompt_file: Path | None, provider: str, timestamp: str) -> Path:
+def build_output_path(
+    prompt_file: Path | None, provider: str, timestamp: str, output_dir: Path
+) -> Path:
     if prompt_file is not None:
         return prompt_file.parent / f"{prompt_file.stem}_{provider}_{timestamp}.png"
-    OUTPUT_DIR.mkdir(exist_ok=True)
-    return OUTPUT_DIR / f"{provider}_{timestamp}.png"
+    output_dir.mkdir(parents=True, exist_ok=True)
+    return output_dir / f"{provider}_{timestamp}.png"
 
 
 def main():
     args = parse_args()
+    output_dir = resolve_output_dir(args.output_dir)
     provider_name, images, prompt, prompt_file = resolve_config(args)
 
     validate_images(images, provider_name)
@@ -107,7 +120,7 @@ def main():
 
     now = datetime.now()
     timestamp = now.strftime("%Y-%m-%d_%H-%M-%S")
-    output_path = build_output_path(prompt_file, provider_name, timestamp)
+    output_path = build_output_path(prompt_file, provider_name, timestamp, output_dir)
     output_path.write_bytes(image_bytes)
 
     if prompt_file:

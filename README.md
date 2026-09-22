@@ -20,42 +20,63 @@ intent — those live in a separate private configuration layer.
 ## Setup
 
 ```bash
-pip install -r requirements.txt
+pip install -e ".[dev]"
 cp .env.example .env
 # Add your GEMINI_API_KEY to .env
 ```
 
+The editable install is required, not optional — it registers the two console scripts,
+`logo-generate` and `logo-export`, in the virtualenv's `bin/`, and they are invocable by
+name from any working directory from then on. `pip` is the reference installer for this
+project. `uv` works ad hoc (`uv pip install -e ".[dev]"`) since it reads
+`pyproject.toml` directly with no lockfile, but `pip` is what these docs assume.
+
+## Output destination
+
+With `LOGO_OUTPUT_DIR` unset, output from an inline prompt (no `--file`) lands in
+`./output` relative to the current working directory the command is run from — not
+relative to where the source lives. `code/.env`, as shipped, sets `LOGO_OUTPUT_DIR` to
+an absolute `code/output/`, so the workspace commands documented below land in
+`code/output/` regardless of the working directory they're run from. On a fresh clone
+with no `.env`, that variable is unset and the default applies.
+
+Precedence, exactly: `--output-dir` flag → `LOGO_OUTPUT_DIR` environment variable →
+`./output` relative to the current working directory. When `--file` is given, output is
+written alongside the prompt file instead, unaffected by any of this.
+
 ## Usage
 
 ```
-python generate_logo.py [--provider PROVIDER] "your prompt here"
-python generate_logo.py [--provider PROVIDER] --file /path/to/prompt.txt [--image PATH ...]
+logo-generate [--provider PROVIDER] "your prompt here"
+logo-generate [--provider PROVIDER] --file /path/to/prompt.txt [--image PATH ...]
 ```
 
 Providers: gemini (default), fal, openai
 
 Examples:
   # Text-only (existing workflow — unchanged)
-  python generate_logo.py --file brain/projects/my-project/active.txt
+  logo-generate --file brain/projects/my-project/active.txt
 
   # Gemini with one reference image
-  python generate_logo.py --provider gemini --file prompt.txt --image screenshot.png
+  logo-generate --provider gemini --file prompt.txt --image screenshot.png
 
   # fal.ai with two reference images
-  python generate_logo.py --provider fal --file prompt.txt --image ui.png --image brand.png
+  logo-generate --provider fal --file prompt.txt --image ui.png --image brand.png
 
   # OpenAI
-  python generate_logo.py --provider openai --file prompt.txt --image ui.png
+  logo-generate --provider openai --file prompt.txt --image ui.png
 
   # Re-run a version using its header defaults (provider + images recorded automatically)
-  python generate_logo.py --file sessions/01-exploration/v01.txt
+  logo-generate --file sessions/01-exploration/v01.txt
 
 ## Secrets
 
 Copy .env.example to .env and fill in the key(s) for the provider(s) you use.
 Only the key for the selected provider needs to be set.
 
-Output is saved alongside the prompt file (or `output/` for inline prompts). Previous outputs are never overwritten.
+Output is saved alongside the prompt file (or the resolved output directory for inline
+prompts — see [Output destination](#output-destination) above). Previous outputs are
+never overwritten.
 
 ## Design
 
@@ -69,15 +90,15 @@ prompt file (private)  →  generate_logo.py  →  output PNG (local)
 
 ## Exporting production assets
 
-Once you have a 1024×1024 master PNG, use `export.py` to generate the full deployment
+Once you have a 1024×1024 master PNG, use `logo-export` to generate the full deployment
 asset set from it:
 
 ```bash
 # Dark variant (favicons + PWA icons + transparent logo mark)
-python export.py --master /path/to/master-dark.png --variant dark --output /path/to/exports/
+logo-export --master /path/to/master-dark.png --variant dark --output /path/to/exports/
 
 # Light variant (light-bg PNG)
-python export.py --master /path/to/master-light.png --variant light --output /path/to/exports/
+logo-export --master /path/to/master-light.png --variant light --output /path/to/exports/
 ```
 
 **dark variant produces:**

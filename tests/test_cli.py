@@ -1,6 +1,6 @@
 import pytest
 import sys
-from providers import resolve_provider, VALID_PROVIDERS
+from logo_generator.providers import resolve_provider, VALID_PROVIDERS
 
 
 def test_resolve_provider_unknown_exits():
@@ -14,13 +14,13 @@ def test_resolve_provider_returns_callable():
     assert callable(fn)
 
 
-def test_valid_providers_contains_all_three():
-    assert set(VALID_PROVIDERS) == {"gemini", "fal", "openai"}
+def test_valid_providers_contains_all_known_providers():
+    assert set(VALID_PROVIDERS) == {"gemini", "fal", "openai", "composite"}
 
 
 import types as builtin_types
 from pathlib import Path
-from generate_logo import resolve_config
+from logo_generator.generate_logo import resolve_config
 
 
 def _make_args(provider=None, file=None, prompt=None, images=None):
@@ -101,24 +101,24 @@ def test_prompt_text_extracted_from_below_separator(tmp_path):
     assert "#" not in prompt
 
 
-from generate_logo import build_output_path
+from logo_generator.generate_logo import build_output_path
 
 
 def test_output_path_with_file_contains_provider_and_stem(tmp_path):
     f = tmp_path / "v01.txt"
-    path = build_output_path(f, "gemini", "2026-06-04_14-30-00")
+    path = build_output_path(f, "gemini", "2026-06-04_14-30-00", tmp_path)
     assert path.name == "v01_gemini_2026-06-04_14-30-00.png"
     assert path.parent == tmp_path
 
 
-def test_output_path_without_file_uses_output_dir():
-    path = build_output_path(None, "fal", "2026-06-04_14-30-00")
+def test_output_path_without_file_uses_output_dir(tmp_path):
+    path = build_output_path(None, "fal", "2026-06-04_14-30-00", tmp_path)
     assert path.name == "fal_2026-06-04_14-30-00.png"
-    assert path.parent.name == "output"
+    assert path.parent == tmp_path
 
 
 def test_output_path_provider_in_filename_for_each_provider(tmp_path):
     f = tmp_path / "v01.txt"
-    for provider in ["gemini", "fal", "openai"]:
-        path = build_output_path(f, provider, "2026-06-04_12-00-00")
+    for provider in VALID_PROVIDERS:
+        path = build_output_path(f, provider, "2026-06-04_12-00-00", tmp_path)
         assert provider in path.name

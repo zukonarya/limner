@@ -24,12 +24,12 @@ def _make_gemini_response(image_bytes: bytes, text: str = "") -> MagicMock:
 
 
 @patch.dict(os.environ, {"GEMINI_API_KEY": "test-key"})
-@patch("providers.gemini.genai.Client")
+@patch("logo_generator.providers.gemini.genai.Client")
 def test_gemini_text_only_passes_string_contents(mock_client_cls, tmp_path):
     mock_client = mock_client_cls.return_value
     mock_client.models.generate_content.return_value = _make_gemini_response(b"PNG_BYTES")
 
-    from providers.gemini import generate
+    from logo_generator.providers.gemini import generate
     result = generate("A logo prompt", [])
 
     call_kwargs = mock_client.models.generate_content.call_args.kwargs
@@ -38,7 +38,7 @@ def test_gemini_text_only_passes_string_contents(mock_client_cls, tmp_path):
 
 
 @patch.dict(os.environ, {"GEMINI_API_KEY": "test-key"})
-@patch("providers.gemini.genai.Client")
+@patch("logo_generator.providers.gemini.genai.Client")
 def test_gemini_with_images_passes_list_contents(mock_client_cls, tmp_path):
     mock_client = mock_client_cls.return_value
     mock_client.models.generate_content.return_value = _make_gemini_response(b"PNG_BYTES")
@@ -46,7 +46,7 @@ def test_gemini_with_images_passes_list_contents(mock_client_cls, tmp_path):
     img = tmp_path / "shot.png"
     img.write_bytes(b"fake_png")
 
-    from providers.gemini import generate
+    from logo_generator.providers.gemini import generate
     result = generate("A composition prompt", [img])
 
     call_kwargs = mock_client.models.generate_content.call_args.kwargs
@@ -58,7 +58,7 @@ def test_gemini_with_images_passes_list_contents(mock_client_cls, tmp_path):
 
 
 @patch.dict(os.environ, {"GEMINI_API_KEY": "test-key"})
-@patch("providers.gemini.genai.Client")
+@patch("logo_generator.providers.gemini.genai.Client")
 def test_gemini_raises_on_no_image_in_response(mock_client_cls):
     mock_client = mock_client_cls.return_value
     response = MagicMock()
@@ -68,14 +68,14 @@ def test_gemini_raises_on_no_image_in_response(mock_client_cls):
     response.candidates[0].content.parts = [text_part]
     mock_client.models.generate_content.return_value = response
 
-    from providers.gemini import generate
+    from logo_generator.providers.gemini import generate
     with pytest.raises(RuntimeError, match="No image returned"):
         generate("prompt", [])
 
 
 # ── fal.ai ──────────────────────────────────────────────────────────────────
 
-@patch("providers.fal.fal_client")
+@patch("logo_generator.providers.fal.fal_client")
 def test_fal_uploads_each_image_and_calls_subscribe(mock_fal, tmp_path):
     img_a = tmp_path / "a.png"
     img_b = tmp_path / "b.png"
@@ -93,7 +93,7 @@ def test_fal_uploads_each_image_and_calls_subscribe(mock_fal, tmp_path):
         mock_urlopen.return_value.__exit__ = MagicMock(return_value=False)
         mock_urlopen.return_value.read.return_value = b"OUTPUT_PNG_BYTES"
 
-        from providers.fal import generate
+        from logo_generator.providers.fal import generate
         result = generate("A marketing prompt", [img_a, img_b])
 
     assert mock_fal.upload_file.call_count == 2
@@ -104,7 +104,7 @@ def test_fal_uploads_each_image_and_calls_subscribe(mock_fal, tmp_path):
     assert result == b"OUTPUT_PNG_BYTES"
 
 
-@patch("providers.fal.fal_client")
+@patch("logo_generator.providers.fal.fal_client")
 def test_fal_passes_prompt_in_arguments(mock_fal, tmp_path):
     mock_fal.upload_file.return_value = "https://cdn.fal/a.png"
     mock_fal.subscribe.return_value = {"images": [{"url": "https://cdn.fal/out.png"}]}
@@ -117,7 +117,7 @@ def test_fal_passes_prompt_in_arguments(mock_fal, tmp_path):
         mock_urlopen.return_value.__exit__ = MagicMock(return_value=False)
         mock_urlopen.return_value.read.return_value = b"bytes"
 
-        from providers.fal import generate
+        from logo_generator.providers.fal import generate
         generate("My prompt text", [img])
 
     args = mock_fal.subscribe.call_args[1]["arguments"]
@@ -128,7 +128,7 @@ import base64
 
 # ── OpenAI ───────────────────────────────────────────────────────────────────
 
-@patch("providers.openai_provider.OpenAI")
+@patch("logo_generator.providers.openai_provider.OpenAI")
 def test_openai_calls_images_edit_with_file_objects(mock_openai_cls, tmp_path):
     img = tmp_path / "shot.png"
     img.write_bytes(b"fake_png")
@@ -139,7 +139,7 @@ def test_openai_calls_images_edit_with_file_objects(mock_openai_cls, tmp_path):
     mock_result.data[0].b64_json = base64.b64encode(raw).decode()
     mock_client.images.edit.return_value = mock_result
 
-    from providers.openai_provider import generate
+    from logo_generator.providers.openai_provider import generate
     result = generate("A marketing prompt", [img])
 
     call_kwargs = mock_client.images.edit.call_args.kwargs
@@ -148,7 +148,7 @@ def test_openai_calls_images_edit_with_file_objects(mock_openai_cls, tmp_path):
     assert result == raw
 
 
-@patch("providers.openai_provider.OpenAI")
+@patch("logo_generator.providers.openai_provider.OpenAI")
 def test_openai_passes_list_for_multiple_images(mock_openai_cls, tmp_path):
     img_a = tmp_path / "a.png"
     img_b = tmp_path / "b.png"
@@ -161,7 +161,7 @@ def test_openai_passes_list_for_multiple_images(mock_openai_cls, tmp_path):
     mock_result.data[0].b64_json = base64.b64encode(raw).decode()
     mock_client.images.edit.return_value = mock_result
 
-    from providers.openai_provider import generate
+    from logo_generator.providers.openai_provider import generate
     generate("prompt", [img_a, img_b])
 
     call_kwargs = mock_client.images.edit.call_args.kwargs
@@ -169,7 +169,7 @@ def test_openai_passes_list_for_multiple_images(mock_openai_cls, tmp_path):
     assert len(call_kwargs["image"]) == 2
 
 
-@patch("providers.openai_provider.OpenAI")
+@patch("logo_generator.providers.openai_provider.OpenAI")
 def test_openai_returns_decoded_bytes(mock_openai_cls, tmp_path):
     img = tmp_path / "shot.png"
     img.write_bytes(b"fake")
@@ -180,6 +180,6 @@ def test_openai_returns_decoded_bytes(mock_openai_cls, tmp_path):
     mock_result.data[0].b64_json = base64.b64encode(raw).decode()
     mock_client.images.edit.return_value = mock_result
 
-    from providers.openai_provider import generate
+    from logo_generator.providers.openai_provider import generate
     result = generate("prompt", [img])
     assert result == raw

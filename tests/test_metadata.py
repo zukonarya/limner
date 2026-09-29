@@ -1,7 +1,7 @@
 import pytest
 from datetime import datetime
 from pathlib import Path
-from metadata import parse_header, write_output_metadata
+from logo_generator.core.metadata import parse_header, write_output_metadata
 
 
 def test_parse_header_extracts_provider():

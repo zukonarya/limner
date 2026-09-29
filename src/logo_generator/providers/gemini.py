@@ -16,7 +16,7 @@ _MIME_TYPES: dict[str, str] = {
 }
 
 
-def generate(prompt: str, images: list[Path]) -> bytes:
+def generate(prompt: str, images: list[Path], aspect_ratio: str = "1:1") -> bytes:
     client = genai.Client(api_key=os.environ["GEMINI_API_KEY"])
 
     if images:
@@ -36,7 +36,7 @@ def generate(prompt: str, images: list[Path]) -> bytes:
         config=types.GenerateContentConfig(
             response_modalities=["TEXT", "IMAGE"],
             image_config=types.ImageConfig(
-                aspect_ratio="1:1",
+                aspect_ratio=aspect_ratio,
                 image_size="1K",
             ),
         ),

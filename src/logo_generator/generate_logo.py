@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+import re
 import sys
 import time
 from datetime import datetime
@@ -39,6 +40,15 @@ def parse_args():
         dest="images",
         metavar="PATH",
         help="Reference image path (repeatable)",
+    )
+    parser.add_argument(
+        "-a",
+        "--aspect-ratio",
+        metavar="W:H",
+        help=(
+            "Output aspect ratio, e.g. 16:9 (gemini only; default 1:1, "
+            "or aspect_ratio from prompt file header)"
+        ),
     )
     parser.add_argument(
         "prompt",
@@ -93,6 +103,24 @@ def resolve_config(args):
     return provider, images, prompt_text, prompt_file
 
 
+def resolve_aspect_ratio(args, provider):
+    ratio = args.aspect_ratio
+    if ratio is None and args.file:
+        header, _ = parse_header(args.file.read_text())
+        ratio = header.get("aspect_ratio")
+    if ratio is None:
+        return None
+    ratio = ratio.strip()
+    match = re.fullmatch(r"([0-9]+):([0-9]+)", ratio)
+    if not match or not all(int(n) > 0 for n in match.groups()):
+        print(f"Error: aspect ratio '{ratio}' must be two positive integers separated by a colon, e.g. 16:9.")
+        sys.exit(1)
+    if provider != "gemini":
+        print(f"Error: aspect ratio is only supported by the gemini provider, not '{provider}'.")
+        sys.exit(1)
+    return ratio
+
+
 def build_output_path(
     prompt_file: Path | None, provider: str, timestamp: str, output_dir: Path
 ) -> Path:
@@ -107,6 +135,8 @@ def main():
     output_dir = resolve_output_dir(args.output_dir)
     provider_name, images, prompt, prompt_file = resolve_config(args)
 
+    aspect_ratio = resolve_aspect_ratio(args, provider_name)
+
     validate_images(images, provider_name)
     get_api_key(provider_name)
 
@@ -114,7 +144,8 @@ def main():
 
     print(f"Generating with {provider_name}...")
     start = time.time()
-    image_bytes = generate_fn(prompt, images)
+    extra = {"aspect_ratio": aspect_ratio} if aspect_ratio else {}
+    image_bytes = generate_fn(prompt, images, **extra)
     elapsed = time.time() - start
     print(f"Response received in {elapsed:.1f}s")
 

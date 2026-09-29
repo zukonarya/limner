@@ -23,12 +23,13 @@ from pathlib import Path
 from logo_generator.generate_logo import resolve_config
 
 
-def _make_args(provider=None, file=None, prompt=None, images=None):
+def _make_args(provider=None, file=None, prompt=None, images=None, aspect_ratio=None):
     ns = builtin_types.SimpleNamespace()
     ns.provider = provider
     ns.file = file
     ns.prompt = prompt
     ns.images = images or []
+    ns.aspect_ratio = aspect_ratio
     return ns
 
 
@@ -122,3 +123,99 @@ def test_output_path_provider_in_filename_for_each_provider(tmp_path):
     for provider in VALID_PROVIDERS:
         path = build_output_path(f, provider, "2026-06-04_12-00-00", tmp_path)
         assert provider in path.name
+
+
+# ── Aspect ratio ────────────────────────────────────────────────────────────
+
+from unittest.mock import MagicMock, patch
+from logo_generator.generate_logo import resolve_aspect_ratio, parse_args, main
+
+
+def test_aspect_ratio_unset_by_default(tmp_path):
+    f = tmp_path / "v01.txt"
+    f.write_text("Plain prompt")
+    assert resolve_aspect_ratio(_make_args(file=f), "gemini") is None
+
+
+def test_aspect_ratio_from_header(tmp_path):
+    f = tmp_path / "v01.txt"
+    f.write_text("# aspect_ratio: 16:9\n---\nPrompt")
+    assert resolve_aspect_ratio(_make_args(file=f), "gemini") == "16:9"
+
+
+def test_aspect_ratio_header_whitespace_trimmed(tmp_path):
+    f = tmp_path / "v01.txt"
+    f.write_text("# aspect_ratio:   4:3  \n---\nPrompt")
+    assert resolve_aspect_ratio(_make_args(file=f), "gemini") == "4:3"
+
+
+def test_aspect_ratio_flag_overrides_header(tmp_path):
+    f = tmp_path / "v01.txt"
+    f.write_text("# aspect_ratio: 16:9\n---\nPrompt")
+    args = _make_args(file=f, aspect_ratio="9:16")
+    assert resolve_aspect_ratio(args, "gemini") == "9:16"
+
+
+def test_aspect_ratio_flag_with_inline_prompt():
+    args = _make_args(prompt="inline", aspect_ratio="3:2")
+    assert resolve_aspect_ratio(args, "gemini") == "3:2"
+
+
+@pytest.mark.parametrize("bad", ["wide", "16-9", "0:9", "16:0", "16:", ":9", "1.5:2", "-1:2", "16:9:1", ""])
+def test_aspect_ratio_malformed_exits(bad, capsys):
+    with pytest.raises(SystemExit) as exc:
+        resolve_aspect_ratio(_make_args(prompt="p", aspect_ratio=bad), "gemini")
+    assert exc.value.code == 1
+    assert "positive integers" in capsys.readouterr().out
+
+
+def test_malformed_header_ratio_exits(tmp_path):
+    f = tmp_path / "v01.txt"
+    f.write_text("# aspect_ratio: wide\n---\nPrompt")
+    with pytest.raises(SystemExit):
+        resolve_aspect_ratio(_make_args(file=f), "gemini")
+
+
+@pytest.mark.parametrize("provider", ["fal", "openai", "composite"])
+def test_aspect_ratio_rejected_for_non_gemini_before_provider_call(provider, capsys):
+    generate = MagicMock()
+    argv = ["logo-generate", "-a", "16:9", "--provider", provider, "prompt"]
+    with patch.object(sys, "argv", argv), \
+         patch("logo_generator.generate_logo.resolve_provider", return_value=generate), \
+         patch("logo_generator.generate_logo.get_api_key"):
+        with pytest.raises(SystemExit) as exc:
+            main()
+    assert exc.value.code == 1
+    assert provider in capsys.readouterr().out
+    generate.assert_not_called()
+
+
+def test_header_ratio_rejected_for_non_gemini_provider(tmp_path, capsys):
+    f = tmp_path / "v01.txt"
+    f.write_text("# provider: fal\n# aspect_ratio: 16:9\n---\nPrompt")
+    with pytest.raises(SystemExit):
+        resolve_aspect_ratio(_make_args(file=f, provider="fal"), "fal")
+    assert "fal" in capsys.readouterr().out
+
+
+def test_main_passes_ratio_only_when_set(tmp_path):
+    generate = MagicMock(return_value=b"PNG")
+    base = ["logo-generate", "--output-dir", str(tmp_path), "prompt"]
+    with patch("logo_generator.generate_logo.resolve_provider", return_value=generate), \
+         patch("logo_generator.generate_logo.get_api_key"):
+        with patch.object(sys, "argv", base[:1] + ["-a", "16:9"] + base[1:]):
+            main()
+        generate.assert_called_with("prompt", [], aspect_ratio="16:9")
+        with patch.object(sys, "argv", base):
+            main()
+        generate.assert_called_with("prompt", [])
+
+
+def test_help_lists_aspect_ratio(capsys):
+    with patch.object(sys, "argv", ["logo-generate", "--help"]):
+        with pytest.raises(SystemExit) as exc:
+            parse_args()
+    assert exc.value.code == 0
+    out = capsys.readouterr().out
+    assert "-a W:H" in out
+    assert "--aspect-ratio W:H" in out

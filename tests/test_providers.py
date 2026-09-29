@@ -73,6 +73,34 @@ def test_gemini_raises_on_no_image_in_response(mock_client_cls):
         generate("prompt", [])
 
 
+@patch.dict(os.environ, {"GEMINI_API_KEY": "test-key"})
+@patch("logo_generator.providers.gemini.genai.Client")
+def test_gemini_default_aspect_ratio_is_square(mock_client_cls):
+    mock_client = mock_client_cls.return_value
+    mock_client.models.generate_content.return_value = _make_gemini_response(b"PNG_BYTES")
+
+    from logo_generator.providers.gemini import generate
+    generate("prompt", [])
+
+    config = mock_client.models.generate_content.call_args.kwargs["config"]
+    assert config.image_config.aspect_ratio == "1:1"
+    assert config.image_config.image_size == "1K"
+
+
+@patch.dict(os.environ, {"GEMINI_API_KEY": "test-key"})
+@patch("logo_generator.providers.gemini.genai.Client")
+def test_gemini_aspect_ratio_reaches_request_config(mock_client_cls):
+    mock_client = mock_client_cls.return_value
+    mock_client.models.generate_content.return_value = _make_gemini_response(b"PNG_BYTES")
+
+    from logo_generator.providers.gemini import generate
+    generate("prompt", [], aspect_ratio="16:9")
+
+    config = mock_client.models.generate_content.call_args.kwargs["config"]
+    assert config.image_config.aspect_ratio == "16:9"
+    assert config.image_config.image_size == "1K"
+
+
 # ── fal.ai ──────────────────────────────────────────────────────────────────
 
 @patch("logo_generator.providers.fal.fal_client")

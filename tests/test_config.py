@@ -38,6 +38,20 @@ def test_whitespace_only_env_var_treated_as_unset(tmp_path, monkeypatch):
     assert result == tmp_path / "output"
 
 
+def test_padded_env_var_is_trimmed(tmp_path, monkeypatch):
+    env_dir = tmp_path / "from_env"
+    monkeypatch.setenv("LOGO_OUTPUT_DIR", f"  {env_dir}\t ")
+    result = resolve_output_dir(None)
+    assert result == env_dir
+
+
+def test_embedded_space_in_env_var_preserved(tmp_path, monkeypatch):
+    env_dir = tmp_path / "my output"
+    monkeypatch.setenv("LOGO_OUTPUT_DIR", f" {env_dir} ")
+    result = resolve_output_dir(None)
+    assert result == env_dir
+
+
 def test_relative_env_var_resolved_to_absolute(tmp_path, monkeypatch):
     monkeypatch.setenv("LOGO_OUTPUT_DIR", "relative_output")
     monkeypatch.chdir(tmp_path)

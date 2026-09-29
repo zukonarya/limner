@@ -9,7 +9,7 @@ intent — those live in a separate private configuration layer.
 ## What this does
 
 - Reads a prompt from a file path or CLI argument
-- Calls `gemini-3-pro-image-preview` via the `google-genai` SDK
+- Calls `gemini-3-pro-image` via the `google-genai` SDK
 - Saves output as `output/YYYY-MM-DD_HH-MM-SS.png`
 
 ## Requirements
@@ -116,6 +116,6 @@ backgrounds are cleanly removed; anti-aliased stroke edges are preserved.
 
 ## Notes
 
-- Model: `gemini-3-pro-image-preview`
+- Model: `gemini-3-pro-image`
 - Output: 1024×1024px PNG (1:1 aspect ratio)
 - The `output/` directory is gitignored — generated images stay local

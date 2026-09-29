@@ -13,8 +13,8 @@ def resolve_output_dir(override: Path | None = None) -> Path:
     if override is not None:
         return Path(override).expanduser().resolve()
 
-    env_value = os.environ.get("LOGO_OUTPUT_DIR", "")
-    if env_value.strip():
+    env_value = os.environ.get("LOGO_OUTPUT_DIR", "").strip()
+    if env_value:
         return Path(env_value).expanduser().resolve()
 
     return (Path.cwd() / "output").resolve()

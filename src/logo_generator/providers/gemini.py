@@ -4,7 +4,7 @@ from pathlib import Path
 from google import genai
 from google.genai import types
 
-MODEL = "gemini-3-pro-image-preview"
+MODEL = "gemini-3-pro-image"
 
 _MIME_TYPES: dict[str, str] = {
     ".png":  "image/png",

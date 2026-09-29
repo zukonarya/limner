@@ -51,7 +51,7 @@ logo-generate [--provider PROVIDER] "your prompt here"
 logo-generate [--provider PROVIDER] --file /path/to/prompt.txt [--image PATH ...]
 ```
 
-Providers: gemini (default), fal, openai
+Providers: gemini (default), fal, openai, composite (local compositing, no API key needed)
 
 Examples:
   # Text-only (existing workflow — unchanged)

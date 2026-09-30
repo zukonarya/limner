@@ -152,6 +152,43 @@ def test_fal_passes_prompt_in_arguments(mock_fal, tmp_path):
     assert args["prompt"] == "My prompt text"
 
 
+def _fal_arguments(tmp_path, **kwargs):
+    img = tmp_path / "a.png"
+    img.write_bytes(b"fake")
+    with patch("logo_generator.providers.fal.fal_client") as mock_fal, \
+         patch("urllib.request.urlopen") as mock_urlopen:
+        mock_fal.upload_file.return_value = "https://cdn.fal/a.png"
+        mock_fal.subscribe.return_value = {"images": [{"url": "https://cdn.fal/out.png"}]}
+        mock_urlopen.return_value.__enter__ = lambda s: s
+        mock_urlopen.return_value.__exit__ = MagicMock(return_value=False)
+        mock_urlopen.return_value.read.return_value = b"bytes"
+
+        from logo_generator.providers.fal import generate
+        generate("p", [img], **kwargs)
+    return mock_fal.subscribe.call_args[1]["arguments"]
+
+
+@pytest.mark.parametrize("ratio,size", [
+    ("1:1", "square_hd"),
+    ("4:3", "landscape_4_3"),
+    ("3:4", "portrait_4_3"),
+    ("16:9", "landscape_16_9"),
+    ("9:16", "portrait_16_9"),
+    ("2:2", "square_hd"),
+    ("32:18", "landscape_16_9"),
+])
+def test_fal_maps_ratio_to_image_size(tmp_path, ratio, size):
+    assert _fal_arguments(tmp_path, aspect_ratio=ratio)["image_size"] == size
+
+
+def test_fal_without_ratio_sends_no_image_size(tmp_path):
+    assert _fal_arguments(tmp_path) == {
+        "prompt": "p",
+        "image_urls": ["https://cdn.fal/a.png"],
+        "output_format": "png",
+    }
+
+
 import base64
 
 # ── OpenAI ───────────────────────────────────────────────────────────────────

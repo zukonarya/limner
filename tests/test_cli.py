@@ -176,7 +176,7 @@ def test_malformed_header_ratio_exits(tmp_path):
         resolve_aspect_ratio(_make_args(file=f), "gemini")
 
 
-@pytest.mark.parametrize("provider", ["fal", "openai", "composite"])
+@pytest.mark.parametrize("provider", ["openai", "composite"])
 def test_aspect_ratio_rejected_for_non_gemini_before_provider_call(provider, capsys):
     generate = MagicMock()
     argv = ["logo-generate", "-a", "16:9", "--provider", provider, "prompt"]
@@ -192,10 +192,60 @@ def test_aspect_ratio_rejected_for_non_gemini_before_provider_call(provider, cap
 
 def test_header_ratio_rejected_for_non_gemini_provider(tmp_path, capsys):
     f = tmp_path / "v01.txt"
-    f.write_text("# provider: fal\n# aspect_ratio: 16:9\n---\nPrompt")
+    f.write_text("# provider: openai\n# aspect_ratio: 16:9\n---\nPrompt")
     with pytest.raises(SystemExit):
-        resolve_aspect_ratio(_make_args(file=f, provider="fal"), "fal")
-    assert "fal" in capsys.readouterr().out
+        resolve_aspect_ratio(_make_args(file=f, provider="openai"), "openai")
+    assert "openai" in capsys.readouterr().out
+
+
+@pytest.mark.parametrize("given,expected", [("16:9", "16:9"), ("2:2", "1:1"), ("32:18", "16:9")])
+def test_fal_ratio_accepted_and_reduced(given, expected):
+    args = _make_args(prompt="p", aspect_ratio=given)
+    assert resolve_aspect_ratio(args, "fal") == expected
+
+
+def test_fal_header_ratio_resolved(tmp_path):
+    f = tmp_path / "v01.txt"
+    f.write_text("# provider: fal\n# aspect_ratio: 9:16\n---\nPrompt")
+    assert resolve_aspect_ratio(_make_args(file=f), "fal") == "9:16"
+
+
+def test_fal_cli_ratio_overrides_header(tmp_path):
+    f = tmp_path / "v01.txt"
+    f.write_text("# provider: fal\n# aspect_ratio: 9:16\n---\nPrompt")
+    args = _make_args(file=f, aspect_ratio="4:3")
+    assert resolve_aspect_ratio(args, "fal") == "4:3"
+
+
+def test_fal_unsupported_ratio_exits_before_upload(tmp_path, capsys):
+    img = tmp_path / "ref.png"
+    img.write_bytes(b"fake")
+    argv = ["logo-generate", "-a", "3:2", "--provider", "fal", "--image", str(img), "prompt"]
+    with patch.object(sys, "argv", argv), \
+         patch("logo_generator.providers.fal.fal_client") as mock_fal, \
+         patch("logo_generator.generate_logo.get_api_key"):
+        with pytest.raises(SystemExit) as exc:
+            main()
+    assert exc.value.code == 1
+    out = capsys.readouterr().out
+    for ratio in ("1:1", "4:3", "3:4", "16:9", "9:16"):
+        assert ratio in out
+    mock_fal.upload_file.assert_not_called()
+    mock_fal.subscribe.assert_not_called()
+
+
+def test_main_passes_reduced_fal_ratio(tmp_path):
+    img = tmp_path / "ref.png"
+    img.write_bytes(b"fake")
+    generate = MagicMock(return_value=b"PNG")
+    argv = ["logo-generate", "-a", "32:18", "--provider", "fal", "--image", str(img),
+            "--output-dir", str(tmp_path), "prompt"]
+    with patch.object(sys, "argv", argv), \
+         patch("logo_generator.generate_logo.validate_images"), \
+         patch("logo_generator.generate_logo.resolve_provider", return_value=generate), \
+         patch("logo_generator.generate_logo.get_api_key"):
+        main()
+    generate.assert_called_with("prompt", [img], aspect_ratio="16:9")
 
 
 def test_main_passes_ratio_only_when_set(tmp_path):

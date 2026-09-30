@@ -46,8 +46,8 @@ def parse_args():
         "--aspect-ratio",
         metavar="W:H",
         help=(
-            "Output aspect ratio, e.g. 16:9 (gemini only; default 1:1, "
-            "or aspect_ratio from prompt file header)"
+            "Output aspect ratio, e.g. 16:9 (gemini: any ratio, default 1:1; fal: 1:1, 4:3, 3:4, "
+            "16:9, 9:16; or aspect_ratio from prompt file header)"
         ),
     )
     parser.add_argument(
@@ -115,8 +115,15 @@ def resolve_aspect_ratio(args, provider):
     if not match or not all(int(n) > 0 for n in match.groups()):
         print(f"Error: aspect ratio '{ratio}' must be two positive integers separated by a colon, e.g. 16:9.")
         sys.exit(1)
-    if provider != "gemini":
-        print(f"Error: aspect ratio is only supported by the gemini provider, not '{provider}'.")
+    if provider == "fal":
+        from logo_generator.providers.fal import IMAGE_SIZES, reduce_ratio
+
+        ratio = reduce_ratio(ratio)
+        if ratio not in IMAGE_SIZES:
+            print(f"Error: fal supports only these aspect ratios: {', '.join(IMAGE_SIZES)}.")
+            sys.exit(1)
+    elif provider != "gemini":
+        print(f"Error: aspect ratio is only supported by the gemini and fal providers, not '{provider}'.")
         sys.exit(1)
     return ratio
 

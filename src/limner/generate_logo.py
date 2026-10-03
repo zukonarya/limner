@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+import re
 import sys
 import time
 from datetime import datetime
@@ -6,13 +7,12 @@ from pathlib import Path
 
 from dotenv import load_dotenv
 
-from metadata import parse_header, write_output_metadata
-from providers import resolve_provider
-from validation import get_api_key, validate_images
+from limner.core.config import resolve_output_dir
+from limner.core.metadata import parse_header, write_output_metadata
+from limner.providers import resolve_provider
+from limner.core.validation import get_api_key, validate_images
 
 load_dotenv()
-
-OUTPUT_DIR = Path(__file__).parent / "output"
 
 
 def parse_args():
@@ -42,9 +42,29 @@ def parse_args():
         help="Reference image path (repeatable)",
     )
     parser.add_argument(
+        "-a",
+        "--aspect-ratio",
+        metavar="W:H",
+        help=(
+            "Output aspect ratio, e.g. 16:9 (gemini: any ratio, default 1:1; fal: 1:1, 4:3, 3:4, "
+            "16:9, 9:16; or aspect_ratio from prompt file header)"
+        ),
+    )
+    parser.add_argument(
         "prompt",
         nargs="?",
         help="Inline prompt text (mutually exclusive with --file)",
+    )
+    parser.add_argument(
+        "--output-dir",
+        type=Path,
+        default=None,
+        metavar="DIR",
+        help=(
+            "Directory to write generated images to when no prompt file is "
+            "given (default: LIMNER_OUTPUT_DIR env var, or ./output relative "
+            "to the current working directory)"
+        ),
     )
 
     args = parser.parse_args()
@@ -83,16 +103,46 @@ def resolve_config(args):
     return provider, images, prompt_text, prompt_file
 
 
-def build_output_path(prompt_file: Path | None, provider: str, timestamp: str) -> Path:
+def resolve_aspect_ratio(args, provider):
+    ratio = args.aspect_ratio
+    if ratio is None and args.file:
+        header, _ = parse_header(args.file.read_text())
+        ratio = header.get("aspect_ratio")
+    if ratio is None:
+        return None
+    ratio = ratio.strip()
+    match = re.fullmatch(r"([0-9]+):([0-9]+)", ratio)
+    if not match or not all(int(n) > 0 for n in match.groups()):
+        print(f"Error: aspect ratio '{ratio}' must be two positive integers separated by a colon, e.g. 16:9.")
+        sys.exit(1)
+    if provider == "fal":
+        from limner.providers.fal import IMAGE_SIZES, reduce_ratio
+
+        ratio = reduce_ratio(ratio)
+        if ratio not in IMAGE_SIZES:
+            print(f"Error: fal supports only these aspect ratios: {', '.join(IMAGE_SIZES)}.")
+            sys.exit(1)
+    elif provider != "gemini":
+        print(f"Error: aspect ratio is only supported by the gemini and fal providers, not '{provider}'.")
+        sys.exit(1)
+    return ratio
+
+
+def build_output_path(
+    prompt_file: Path | None, provider: str, timestamp: str, output_dir: Path
+) -> Path:
     if prompt_file is not None:
         return prompt_file.parent / f"{prompt_file.stem}_{provider}_{timestamp}.png"
-    OUTPUT_DIR.mkdir(exist_ok=True)
-    return OUTPUT_DIR / f"{provider}_{timestamp}.png"
+    output_dir.mkdir(parents=True, exist_ok=True)
+    return output_dir / f"{provider}_{timestamp}.png"
 
 
 def main():
     args = parse_args()
+    output_dir = resolve_output_dir(args.output_dir)
     provider_name, images, prompt, prompt_file = resolve_config(args)
+
+    aspect_ratio = resolve_aspect_ratio(args, provider_name)
 
     validate_images(images, provider_name)
     get_api_key(provider_name)
@@ -101,13 +151,14 @@ def main():
 
     print(f"Generating with {provider_name}...")
     start = time.time()
-    image_bytes = generate_fn(prompt, images)
+    extra = {"aspect_ratio": aspect_ratio} if aspect_ratio else {}
+    image_bytes = generate_fn(prompt, images, **extra)
     elapsed = time.time() - start
     print(f"Response received in {elapsed:.1f}s")
 
     now = datetime.now()
     timestamp = now.strftime("%Y-%m-%d_%H-%M-%S")
-    output_path = build_output_path(prompt_file, provider_name, timestamp)
+    output_path = build_output_path(prompt_file, provider_name, timestamp, output_dir)
     output_path.write_bytes(image_bytes)
 
     if prompt_file:

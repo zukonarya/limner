@@ -13,7 +13,12 @@ __pycache__/
 *.egg-info/
 .venv/
 venv/
+build/
+dist/
 
 # OS
 .DS_Store
 Thumbs.db
+
+# Claude Code state (may reference private brain-repo paths)
+.claude/

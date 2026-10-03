@@ -3,7 +3,7 @@ requires = ["setuptools>=68"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "logo-generator"
+name = "limner"
 version = "0.1.0"
 description = "Programmatic logo and product-image generation CLI"
 requires-python = ">=3.13"
@@ -22,8 +22,8 @@ dev = [
 ]
 
 [project.scripts]
-logo-generate = "logo_generator.generate_logo:main"
-logo-export = "logo_generator.export:main"
+limner-generate = "limner.generate_logo:main"
+limner-export = "limner.export:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]

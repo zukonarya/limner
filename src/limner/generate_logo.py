@@ -7,10 +7,10 @@ from pathlib import Path
 
 from dotenv import load_dotenv
 
-from logo_generator.core.config import resolve_output_dir
-from logo_generator.core.metadata import parse_header, write_output_metadata
-from logo_generator.providers import resolve_provider
-from logo_generator.core.validation import get_api_key, validate_images
+from limner.core.config import resolve_output_dir
+from limner.core.metadata import parse_header, write_output_metadata
+from limner.providers import resolve_provider
+from limner.core.validation import get_api_key, validate_images
 
 load_dotenv()
 
@@ -62,7 +62,7 @@ def parse_args():
         metavar="DIR",
         help=(
             "Directory to write generated images to when no prompt file is "
-            "given (default: LOGO_OUTPUT_DIR env var, or ./output relative "
+            "given (default: LIMNER_OUTPUT_DIR env var, or ./output relative "
             "to the current working directory)"
         ),
     )
@@ -116,7 +116,7 @@ def resolve_aspect_ratio(args, provider):
         print(f"Error: aspect ratio '{ratio}' must be two positive integers separated by a colon, e.g. 16:9.")
         sys.exit(1)
     if provider == "fal":
-        from logo_generator.providers.fal import IMAGE_SIZES, reduce_ratio
+        from limner.providers.fal import IMAGE_SIZES, reduce_ratio
 
         ratio = reduce_ratio(ratio)
         if ratio not in IMAGE_SIZES:

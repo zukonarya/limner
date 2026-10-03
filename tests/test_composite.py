@@ -3,7 +3,7 @@ import io
 import pytest
 from PIL import Image
 
-from logo_generator.providers import resolve_provider
+from limner.providers import resolve_provider
 
 PNG_SIGNATURE = b"\x89PNG\r\n\x1a\n"
 

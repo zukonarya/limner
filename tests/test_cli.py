@@ -1,6 +1,6 @@
 import pytest
 import sys
-from logo_generator.providers import resolve_provider, VALID_PROVIDERS
+from limner.providers import resolve_provider, VALID_PROVIDERS
 
 
 def test_resolve_provider_unknown_exits():
@@ -20,7 +20,7 @@ def test_valid_providers_contains_all_known_providers():
 
 import types as builtin_types
 from pathlib import Path
-from logo_generator.generate_logo import resolve_config
+from limner.generate_logo import resolve_config
 
 
 def _make_args(provider=None, file=None, prompt=None, images=None, aspect_ratio=None):
@@ -102,7 +102,7 @@ def test_prompt_text_extracted_from_below_separator(tmp_path):
     assert "#" not in prompt
 
 
-from logo_generator.generate_logo import build_output_path
+from limner.generate_logo import build_output_path
 
 
 def test_output_path_with_file_contains_provider_and_stem(tmp_path):
@@ -128,7 +128,7 @@ def test_output_path_provider_in_filename_for_each_provider(tmp_path):
 # ── Aspect ratio ────────────────────────────────────────────────────────────
 
 from unittest.mock import MagicMock, patch
-from logo_generator.generate_logo import resolve_aspect_ratio, parse_args, main
+from limner.generate_logo import resolve_aspect_ratio, parse_args, main
 
 
 def test_aspect_ratio_unset_by_default(tmp_path):
@@ -179,10 +179,10 @@ def test_malformed_header_ratio_exits(tmp_path):
 @pytest.mark.parametrize("provider", ["openai", "composite"])
 def test_aspect_ratio_rejected_for_non_gemini_before_provider_call(provider, capsys):
     generate = MagicMock()
-    argv = ["logo-generate", "-a", "16:9", "--provider", provider, "prompt"]
+    argv = ["limner-generate", "-a", "16:9", "--provider", provider, "prompt"]
     with patch.object(sys, "argv", argv), \
-         patch("logo_generator.generate_logo.resolve_provider", return_value=generate), \
-         patch("logo_generator.generate_logo.get_api_key"):
+         patch("limner.generate_logo.resolve_provider", return_value=generate), \
+         patch("limner.generate_logo.get_api_key"):
         with pytest.raises(SystemExit) as exc:
             main()
     assert exc.value.code == 1
@@ -220,10 +220,10 @@ def test_fal_cli_ratio_overrides_header(tmp_path):
 def test_fal_unsupported_ratio_exits_before_upload(tmp_path, capsys):
     img = tmp_path / "ref.png"
     img.write_bytes(b"fake")
-    argv = ["logo-generate", "-a", "3:2", "--provider", "fal", "--image", str(img), "prompt"]
+    argv = ["limner-generate", "-a", "3:2", "--provider", "fal", "--image", str(img), "prompt"]
     with patch.object(sys, "argv", argv), \
-         patch("logo_generator.providers.fal.fal_client") as mock_fal, \
-         patch("logo_generator.generate_logo.get_api_key"):
+         patch("limner.providers.fal.fal_client") as mock_fal, \
+         patch("limner.generate_logo.get_api_key"):
         with pytest.raises(SystemExit) as exc:
             main()
     assert exc.value.code == 1
@@ -238,21 +238,21 @@ def test_main_passes_reduced_fal_ratio(tmp_path):
     img = tmp_path / "ref.png"
     img.write_bytes(b"fake")
     generate = MagicMock(return_value=b"PNG")
-    argv = ["logo-generate", "-a", "32:18", "--provider", "fal", "--image", str(img),
+    argv = ["limner-generate", "-a", "32:18", "--provider", "fal", "--image", str(img),
             "--output-dir", str(tmp_path), "prompt"]
     with patch.object(sys, "argv", argv), \
-         patch("logo_generator.generate_logo.validate_images"), \
-         patch("logo_generator.generate_logo.resolve_provider", return_value=generate), \
-         patch("logo_generator.generate_logo.get_api_key"):
+         patch("limner.generate_logo.validate_images"), \
+         patch("limner.generate_logo.resolve_provider", return_value=generate), \
+         patch("limner.generate_logo.get_api_key"):
         main()
     generate.assert_called_with("prompt", [img], aspect_ratio="16:9")
 
 
 def test_main_passes_ratio_only_when_set(tmp_path):
     generate = MagicMock(return_value=b"PNG")
-    base = ["logo-generate", "--output-dir", str(tmp_path), "prompt"]
-    with patch("logo_generator.generate_logo.resolve_provider", return_value=generate), \
-         patch("logo_generator.generate_logo.get_api_key"):
+    base = ["limner-generate", "--output-dir", str(tmp_path), "prompt"]
+    with patch("limner.generate_logo.resolve_provider", return_value=generate), \
+         patch("limner.generate_logo.get_api_key"):
         with patch.object(sys, "argv", base[:1] + ["-a", "16:9"] + base[1:]):
             main()
         generate.assert_called_with("prompt", [], aspect_ratio="16:9")
@@ -262,7 +262,7 @@ def test_main_passes_ratio_only_when_set(tmp_path):
 
 
 def test_help_lists_aspect_ratio(capsys):
-    with patch.object(sys, "argv", ["logo-generate", "--help"]):
+    with patch.object(sys, "argv", ["limner-generate", "--help"]):
         with pytest.raises(SystemExit) as exc:
             parse_args()
     assert exc.value.code == 0

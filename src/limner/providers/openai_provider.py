@@ -3,7 +3,7 @@ from pathlib import Path
 
 from openai import OpenAI
 
-from .result import ProviderResult, provider_response
+from .result import ProviderError, ProviderResult, provider_response
 
 MODEL = "gpt-image-2"
 SETTINGS = {"output_format": "png"}
@@ -23,6 +23,10 @@ def generate(prompt: str, images: list[Path]) -> ProviderResult:
             prompt=prompt,
             **SETTINGS,
         )
+    except Exception as e:
+        raise ProviderError(
+            e, endpoint="images.edit", model=MODEL, settings_sent=dict(SETTINGS)
+        ) from e
     finally:
         for h in handles:
             h.close()

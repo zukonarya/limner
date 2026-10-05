@@ -4,7 +4,7 @@ from pathlib import Path
 from google import genai
 from google.genai import types
 
-from .result import ProviderResult, provider_response
+from .result import ProviderError, ProviderResult, provider_response
 
 MODEL = "gemini-3-pro-image"
 
@@ -39,22 +39,27 @@ def generate(prompt: str, images: list[Path], aspect_ratio: str = "1:1") -> Prov
             image_size="1K",
         ),
     )
-    response = client.models.generate_content(model=MODEL, contents=contents, config=config)
+    called = dict(
+        endpoint="models.generate_content",
+        model=MODEL,
+        settings_sent=config.model_dump(mode="json", exclude_none=True),
+    )
+    try:
+        response = client.models.generate_content(model=MODEL, contents=contents, config=config)
+    except Exception as e:
+        raise ProviderError(e, **called) from e
 
-    for part in response.candidates[0].content.parts:
+    metadata = provider_response(
+        request_id=response.response_id,
+        model_version=response.model_version,
+        usage=response.usage_metadata,
+    )
+    candidate = (response.candidates or [None])[0]
+    for part in (candidate.content.parts if candidate and candidate.content else None) or []:
         if part.text:
             print(f"Model note: {part.text.strip()}")
         if part.inline_data is not None:
-            return ProviderResult(
-                image=part.inline_data.data,
-                endpoint="models.generate_content",
-                model=MODEL,
-                settings_sent=config.model_dump(mode="json", exclude_none=True),
-                provider_response=provider_response(
-                    request_id=response.response_id,
-                    model_version=response.model_version,
-                    usage=response.usage_metadata,
-                ),
-            )
+            return ProviderResult(image=part.inline_data.data, provider_response=metadata, **called)
 
-    raise RuntimeError("No image returned in Gemini response.")
+    error = RuntimeError("No image returned in Gemini response.")
+    raise ProviderError(error, provider_response=metadata, **called) from error

@@ -4,6 +4,8 @@ from pathlib import Path
 from google import genai
 from google.genai import types
 
+from .result import ProviderResult, provider_response
+
 MODEL = "gemini-3-pro-image"
 
 _MIME_TYPES: dict[str, str] = {
@@ -16,7 +18,7 @@ _MIME_TYPES: dict[str, str] = {
 }
 
 
-def generate(prompt: str, images: list[Path], aspect_ratio: str = "1:1") -> bytes:
+def generate(prompt: str, images: list[Path], aspect_ratio: str = "1:1") -> ProviderResult:
     client = genai.Client(api_key=os.environ["GEMINI_API_KEY"])
 
     if images:
@@ -30,22 +32,29 @@ def generate(prompt: str, images: list[Path], aspect_ratio: str = "1:1") -> byte
     else:
         contents = prompt
 
-    response = client.models.generate_content(
-        model=MODEL,
-        contents=contents,
-        config=types.GenerateContentConfig(
-            response_modalities=["TEXT", "IMAGE"],
-            image_config=types.ImageConfig(
-                aspect_ratio=aspect_ratio,
-                image_size="1K",
-            ),
+    config = types.GenerateContentConfig(
+        response_modalities=["TEXT", "IMAGE"],
+        image_config=types.ImageConfig(
+            aspect_ratio=aspect_ratio,
+            image_size="1K",
         ),
     )
+    response = client.models.generate_content(model=MODEL, contents=contents, config=config)
 
     for part in response.candidates[0].content.parts:
         if part.text:
             print(f"Model note: {part.text.strip()}")
         if part.inline_data is not None:
-            return part.inline_data.data
+            return ProviderResult(
+                image=part.inline_data.data,
+                endpoint="models.generate_content",
+                model=MODEL,
+                settings_sent=config.model_dump(mode="json", exclude_none=True),
+                provider_response=provider_response(
+                    request_id=response.response_id,
+                    model_version=response.model_version,
+                    usage=response.usage_metadata,
+                ),
+            )
 
     raise RuntimeError("No image returned in Gemini response.")

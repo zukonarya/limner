@@ -4,6 +4,10 @@ from pathlib import Path
 
 import fal_client
 
+from .result import ProviderResult, provider_response
+
+
+ENDPOINT = "fal-ai/flux-2-pro/edit"
 
 IMAGE_SIZES = {
     "1:1": "square_hd",
@@ -20,7 +24,7 @@ def reduce_ratio(ratio: str) -> str:
     return f"{w // d}:{h // d}"
 
 
-def generate(prompt: str, images: list[Path], aspect_ratio: str | None = None) -> bytes:
+def generate(prompt: str, images: list[Path], aspect_ratio: str | None = None) -> ProviderResult:
     arguments = {
         "prompt": prompt,
         "output_format": "png",
@@ -30,11 +34,23 @@ def generate(prompt: str, images: list[Path], aspect_ratio: str | None = None) -
 
     image_urls = [fal_client.upload_file(str(path)) for path in images]
 
+    request_ids = []
     result = fal_client.subscribe(
-        "fal-ai/flux-2-pro/edit",
+        ENDPOINT,
         arguments={**arguments, "image_urls": image_urls},
+        on_enqueue=request_ids.append,
     )
 
     output_url = result["images"][0]["url"]
     with urllib.request.urlopen(output_url) as resp:
-        return resp.read()
+        image = resp.read()
+
+    return ProviderResult(
+        image=image,
+        endpoint=ENDPOINT,
+        settings_sent={k: v for k, v in arguments.items() if k != "prompt"},
+        provider_response=provider_response(
+            request_id=request_ids[0] if request_ids else None,
+            seed=result.get("seed"),
+        ),
+    )

@@ -4,6 +4,8 @@ from pathlib import Path
 import numpy as np
 from PIL import Image, ImageDraw, ImageFilter
 
+from .result import ProviderResult, provider_response
+
 # ── Canvas ────────────────────────────────────────────────────────────────────
 CANVAS_W = 1440
 CANVAS_H = 900
@@ -107,7 +109,7 @@ def _make_reflection(monitor_layer: Image.Image) -> Image.Image:
     return refl
 
 
-def generate(prompt: str, images: list[Path]) -> bytes:
+def generate(prompt: str, images: list[Path]) -> ProviderResult:
     if not images:
         raise ValueError("composite provider requires at least one --image")
 
@@ -124,4 +126,6 @@ def generate(prompt: str, images: list[Path]) -> bytes:
 
     buf = io.BytesIO()
     canvas.convert("RGB").save(buf, format="PNG")
-    return buf.getvalue()
+    return ProviderResult(
+        image=buf.getvalue(), endpoint="local", provider_response=provider_response()
+    )

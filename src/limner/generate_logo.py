@@ -152,7 +152,7 @@ def main():
     print(f"Generating with {provider_name}...")
     start = time.time()
     extra = {"aspect_ratio": aspect_ratio} if aspect_ratio else {}
-    image_bytes = generate_fn(prompt, images, **extra)
+    image_bytes = generate_fn(prompt, images, **extra).image
     elapsed = time.time() - start
     print(f"Response received in {elapsed:.1f}s")
 

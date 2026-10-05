@@ -237,7 +237,7 @@ def test_fal_unsupported_ratio_exits_before_upload(tmp_path, capsys):
 def test_main_passes_reduced_fal_ratio(tmp_path):
     img = tmp_path / "ref.png"
     img.write_bytes(b"fake")
-    generate = MagicMock(return_value=b"PNG")
+    generate = MagicMock(return_value=MagicMock(image=b"PNG"))
     argv = ["limner-generate", "-a", "32:18", "--provider", "fal", "--image", str(img),
             "--output-dir", str(tmp_path), "prompt"]
     with patch.object(sys, "argv", argv), \
@@ -249,7 +249,7 @@ def test_main_passes_reduced_fal_ratio(tmp_path):
 
 
 def test_main_passes_ratio_only_when_set(tmp_path):
-    generate = MagicMock(return_value=b"PNG")
+    generate = MagicMock(return_value=MagicMock(image=b"PNG"))
     base = ["limner-generate", "--output-dir", str(tmp_path), "prompt"]
     with patch("limner.generate_logo.resolve_provider", return_value=generate), \
          patch("limner.generate_logo.get_api_key"):

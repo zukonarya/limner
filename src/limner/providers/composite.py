@@ -4,7 +4,7 @@ from pathlib import Path
 import numpy as np
 from PIL import Image, ImageDraw, ImageFilter
 
-from .result import ProviderResult, provider_response
+from .result import ProviderError, ProviderResult, provider_response
 
 # ── Canvas ────────────────────────────────────────────────────────────────────
 CANVAS_W = 1440
@@ -113,19 +113,22 @@ def generate(prompt: str, images: list[Path]) -> ProviderResult:
     if not images:
         raise ValueError("composite provider requires at least one --image")
 
-    screenshot = Image.open(images[0]).convert("RGBA")
-    screenshot.thumbnail((SCREENSHOT_MAX_W, SCREENSHOT_MAX_H), Image.LANCZOS)
+    try:
+        screenshot = Image.open(images[0]).convert("RGBA")
+        screenshot.thumbnail((SCREENSHOT_MAX_W, SCREENSHOT_MAX_H), Image.LANCZOS)
 
-    framed = _add_bezel(screenshot)
-    monitor_layer = _apply_tilt(framed)
+        framed = _add_bezel(screenshot)
+        monitor_layer = _apply_tilt(framed)
 
-    canvas = Image.new("RGBA", (CANVAS_W, CANVAS_H), BG_COLOR + (255,))
-    canvas.alpha_composite(_make_glow(monitor_layer))
-    canvas.alpha_composite(_make_reflection(monitor_layer))
-    canvas.alpha_composite(monitor_layer)
+        canvas = Image.new("RGBA", (CANVAS_W, CANVAS_H), BG_COLOR + (255,))
+        canvas.alpha_composite(_make_glow(monitor_layer))
+        canvas.alpha_composite(_make_reflection(monitor_layer))
+        canvas.alpha_composite(monitor_layer)
 
-    buf = io.BytesIO()
-    canvas.convert("RGB").save(buf, format="PNG")
+        buf = io.BytesIO()
+        canvas.convert("RGB").save(buf, format="PNG")
+    except Exception as e:
+        raise ProviderError(e, endpoint="local") from e
     return ProviderResult(
         image=buf.getvalue(), endpoint="local", provider_response=provider_response()
     )

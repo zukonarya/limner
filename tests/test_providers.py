@@ -4,6 +4,8 @@ import pytest
 from pathlib import Path
 from unittest.mock import MagicMock, patch, call
 
+from limner.providers.result import ProviderError
+
 
 # ── Gemini ──────────────────────────────────────────────────────────────────
 
@@ -64,7 +66,7 @@ def test_gemini_with_images_passes_list_contents(mock_client_cls, tmp_path):
 @patch("limner.providers.gemini.genai.Client")
 def test_gemini_raises_on_no_image_in_response(mock_client_cls):
     mock_client = mock_client_cls.return_value
-    response = MagicMock()
+    response = MagicMock(response_id="resp-1", model_version="model-v1", usage_metadata=None)
     text_part = MagicMock()
     text_part.text = "some text"
     text_part.inline_data = None
@@ -72,8 +74,25 @@ def test_gemini_raises_on_no_image_in_response(mock_client_cls):
     mock_client.models.generate_content.return_value = response
 
     from limner.providers.gemini import generate
-    with pytest.raises(RuntimeError, match="No image returned"):
+    with pytest.raises(ProviderError) as exc:
         generate("prompt", [])
+    assert isinstance(exc.value.__cause__, RuntimeError)
+    assert "No image returned" in str(exc.value.__cause__)
+    assert exc.value.provider_response["request_id"] == "resp-1"
+    assert exc.value.provider_response["model_version"] == "model-v1"
+    assert exc.value.model == "gemini-3-pro-image"
+
+
+@patch.dict(os.environ, {"GEMINI_API_KEY": "test-key"})
+@patch("limner.providers.gemini.genai.Client")
+def test_gemini_blocked_response_with_no_candidates_raises_provider_error(mock_client_cls):
+    response = MagicMock(candidates=[], response_id="resp-2", model_version="model-v1", usage_metadata=None)
+    mock_client_cls.return_value.models.generate_content.return_value = response
+    from limner.providers.gemini import generate
+    with pytest.raises(ProviderError) as exc:
+        generate("prompt", [])
+    assert str(exc.value.__cause__) == "No image returned in Gemini response."
+    assert exc.value.provider_response["request_id"] == "resp-2"
 
 
 @patch.dict(os.environ, {"GEMINI_API_KEY": "test-key"})
@@ -404,3 +423,64 @@ def test_fal_metadata_is_null_when_missing(tmp_path):
     assert result.provider_response == {
         "request_id": None, "seed": None, "model_version": None, "usage": None,
     }
+
+
+# ── Failure metadata ─────────────────────────────────────────────────────────
+
+@patch.dict(os.environ, {"GEMINI_API_KEY": "test-key"})
+@patch("limner.providers.gemini.genai.Client")
+def test_gemini_failure_raises_provider_error(mock_client_cls, tmp_path):
+    original = RuntimeError("quota exceeded")
+    mock_client_cls.return_value.models.generate_content.side_effect = original
+    from limner.providers.gemini import generate
+    with pytest.raises(ProviderError) as exc:
+        generate("p", [], aspect_ratio="16:9")
+    assert exc.value.__cause__ is original
+    assert exc.value.endpoint == "models.generate_content"
+    assert exc.value.model == "gemini-3-pro-image"
+    assert exc.value.settings_sent["image_config"]["aspect_ratio"] == "16:9"
+
+
+@patch("limner.providers.openai_provider.OpenAI")
+def test_openai_failure_raises_provider_error(mock_openai_cls, tmp_path):
+    img = tmp_path / "a.png"
+    img.write_bytes(b"fake")
+    original = RuntimeError("rate limited")
+    mock_openai_cls.return_value.images.edit.side_effect = original
+    from limner.providers.openai_provider import generate
+    with pytest.raises(ProviderError) as exc:
+        generate("p", [img])
+    assert exc.value.__cause__ is original
+    assert (exc.value.endpoint, exc.value.model) == ("images.edit", "gpt-image-2")
+    assert exc.value.settings_sent == {"output_format": "png"}
+
+
+def test_fal_failure_carries_queued_request_id(tmp_path):
+    img = tmp_path / "a.png"
+    img.write_bytes(b"fake")
+    original = RuntimeError("job failed")
+
+    def subscribe(application, arguments, on_enqueue=None):
+        on_enqueue("req-fal")
+        raise original
+
+    with patch("limner.providers.fal.fal_client") as mock_fal:
+        mock_fal.upload_file.return_value = "https://cdn.fal/a.png"
+        mock_fal.subscribe.side_effect = subscribe
+        from limner.providers.fal import generate
+        with pytest.raises(ProviderError) as exc:
+            generate("p", [img], aspect_ratio="1:1")
+    assert exc.value.__cause__ is original
+    assert exc.value.endpoint == "fal-ai/flux-2-pro/edit"
+    assert exc.value.model is None
+    assert exc.value.settings_sent == {"output_format": "png", "image_size": "square_hd"}
+    assert exc.value.provider_response["request_id"] == "req-fal"
+
+
+def test_composite_failure_raises_provider_error(tmp_path):
+    bad = tmp_path / "bad.png"
+    bad.write_bytes(b"not an image")
+    from limner.providers.composite import generate
+    with pytest.raises(ProviderError) as exc:
+        generate("p", [bad])
+    assert exc.value.endpoint == "local"

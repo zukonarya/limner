@@ -2,14 +2,16 @@
 import re
 import sys
 import time
-from datetime import datetime
 from pathlib import Path
 
 from dotenv import load_dotenv
 
 from limner.core.config import resolve_output_dir
 from limner.core.metadata import parse_header
+from limner.core.receipt import build_receipt, new_job_id, redact_error, utc_now, write_receipt
+from limner.core.writeonce import WriteOnceError, write_once
 from limner.providers import resolve_provider
+from limner.providers.result import ProviderError
 from limner.core.validation import get_api_key, validate_images
 
 load_dotenv()
@@ -149,19 +151,80 @@ def main():
 
     generate_fn = resolve_provider(provider_name)
 
+    started_at = utc_now()
+    timestamp = started_at.astimezone().strftime("%Y-%m-%d_%H-%M-%S")
+    output_path = build_output_path(prompt_file, provider_name, timestamp, output_dir)
+    receipt_path = output_path.with_suffix(".run.json")
+    for target in (output_path, receipt_path):
+        if target.exists():
+            print(f"Error: refusing to overwrite existing file: {target}")
+            sys.exit(1)
+
+    receipt_fields = dict(
+        job_id=new_job_id(started_at),
+        provider=provider_name,
+        prompt=prompt,
+        started_at=started_at,
+        prompt_file=prompt_file.name if prompt_file else None,
+        references=images,
+    )
+
     print(f"Generating with {provider_name}...")
     start = time.time()
     extra = {"aspect_ratio": aspect_ratio} if aspect_ratio else {}
-    image_bytes = generate_fn(prompt, images, **extra).image
+    try:
+        result = generate_fn(prompt, images, **extra)
+    except Exception as e:
+        elapsed = time.time() - start
+        original = e.__cause__ if isinstance(e, ProviderError) and e.__cause__ else e
+        called = (
+            dict(endpoint=e.endpoint, model=e.model, settings_sent=e.settings_sent,
+                 provider_response=e.provider_response)
+            if isinstance(e, ProviderError) else {}
+        )
+        receipt = build_receipt(
+            **receipt_fields,
+            **called,
+            status="failed",
+            error={"type": type(original).__name__, "message": redact_error(str(original))},
+            finished_at=utc_now(),
+            duration_s=elapsed,
+        )
+        print(f"Error: {type(original).__name__}: {original}")
+        try:
+            write_receipt(receipt_path, receipt)
+        except WriteOnceError as write_error:
+            print(f"Error: {write_error}")
+        else:
+            print(f"Receipt: {receipt_path}")
+        sys.exit(1)
     elapsed = time.time() - start
     print(f"Response received in {elapsed:.1f}s")
 
-    now = datetime.now()
-    timestamp = now.strftime("%Y-%m-%d_%H-%M-%S")
-    output_path = build_output_path(prompt_file, provider_name, timestamp, output_dir)
-    output_path.write_bytes(image_bytes)
-
+    try:
+        write_once(output_path, result.image)
+    except WriteOnceError as e:
+        print(f"Error: {e}")
+        sys.exit(1)
     print(f"Saved: {output_path}")
+
+    receipt = build_receipt(
+        **receipt_fields,
+        status="succeeded",
+        finished_at=utc_now(),
+        duration_s=elapsed,
+        endpoint=result.endpoint,
+        model=result.model,
+        settings_sent=result.settings_sent,
+        provider_response=result.provider_response,
+        image=output_path.name,
+    )
+    try:
+        write_receipt(receipt_path, receipt)
+    except WriteOnceError as e:
+        print(f"Error: image saved, but the receipt could not be written: {e}")
+        sys.exit(1)
+    print(f"Receipt: {receipt_path}")
 
 
 if __name__ == "__main__":

@@ -8,7 +8,7 @@ from pathlib import Path
 from dotenv import load_dotenv
 
 from limner.core.config import resolve_output_dir
-from limner.core.metadata import parse_header, write_output_metadata
+from limner.core.metadata import parse_header
 from limner.providers import resolve_provider
 from limner.core.validation import get_api_key, validate_images
 
@@ -160,9 +160,6 @@ def main():
     timestamp = now.strftime("%Y-%m-%d_%H-%M-%S")
     output_path = build_output_path(prompt_file, provider_name, timestamp, output_dir)
     output_path.write_bytes(image_bytes)
-
-    if prompt_file:
-        write_output_metadata(prompt_file, output_path, now)
 
     print(f"Saved: {output_path}")
 

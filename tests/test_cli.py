@@ -392,3 +392,31 @@ def test_failed_receipt_records_what_was_called_and_the_original_error(tmp_path,
     assert (receipt["endpoint"], receipt["model"], receipt["settings_sent"]) == ("models.example", "m-1", {"n": 1})
     assert receipt["provider_response"]["request_id"] == "req-1"
     assert receipt["error"] == {"type": "RuntimeError", "message": "quota exceeded"}
+
+
+# ── Up-front input checks ───────────────────────────────────────────────────
+
+
+def test_unknown_header_provider_exits_cleanly_before_writing(tmp_path, capsys):
+    f = tmp_path / "v01.txt"
+    f.write_text("# provider: dalle\n---\nPrompt")
+    generate = MagicMock()
+    with pytest.raises(SystemExit) as exc:
+        _run(["--file", str(f)], generate)
+    assert exc.value.code == 1
+    assert "unknown provider 'dalle'" in capsys.readouterr().out
+    generate.assert_not_called()
+    assert sorted(p.name for p in tmp_path.iterdir()) == ["v01.txt"]
+
+
+def test_live_fal_without_reference_exits_before_key_check(tmp_path):
+    generate = MagicMock()
+    with patch.object(sys, "argv", ["limner-generate", "--provider", "fal", "--output-dir", str(tmp_path), "p"]), \
+         patch("limner.generate_logo.resolve_provider", return_value=generate), \
+         patch("limner.generate_logo.get_api_key") as key:
+        with pytest.raises(SystemExit) as exc:
+            main()
+    assert exc.value.code == 1
+    key.assert_not_called()
+    generate.assert_not_called()
+    assert list(tmp_path.iterdir()) == []

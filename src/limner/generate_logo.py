@@ -12,7 +12,7 @@ from limner.core.receipt import build_receipt, new_job_id, redact_error, utc_now
 from limner.core.writeonce import WriteOnceError, write_once
 from limner.providers import resolve_provider
 from limner.providers.result import ProviderError
-from limner.core.validation import get_api_key, validate_images
+from limner.core.validation import get_api_key, validate_images, validate_provider
 
 load_dotenv()
 
@@ -143,6 +143,7 @@ def main():
     args = parse_args()
     output_dir = resolve_output_dir(args.output_dir)
     provider_name, images, prompt, prompt_file = resolve_config(args)
+    validate_provider(provider_name)
 
     aspect_ratio = resolve_aspect_ratio(args, provider_name)
 

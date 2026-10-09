@@ -76,7 +76,19 @@ Only the key for the selected provider needs to be set.
 
 Output is saved alongside the prompt file (or the resolved output directory for inline
 prompts — see [Output destination](#output-destination) above). Previous outputs are
-never overwritten.
+never overwritten: if the image name or its receipt name is already taken, the run is refused
+before the provider is called.
+
+Each run also writes a run receipt, `<image name>.run.json`, beside the image. It records the
+provider, endpoint, model, settings sent, a hash of the prompt and of each reference image,
+the provider's request id, seed and usage where it returns them, and UTC times. A run whose
+provider call fails gets a receipt with `status: "failed"` and a redacted error message (no
+URLs or credential-like strings); the terminal shows the full error. Argument, key and image
+validation failures write no receipt.
+
+Prompt files are never modified. The `# output:` and `# timestamp:` lines that earlier
+versions appended to the header are no longer written; if present in an old file they are
+ignored.
 
 ## Design
 

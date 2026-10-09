@@ -118,7 +118,7 @@ def resolve_aspect_ratio(args, provider):
         print(f"Error: aspect ratio '{ratio}' must be two positive integers separated by a colon, e.g. 16:9.")
         sys.exit(1)
     if provider == "fal":
-        from limner.providers.fal import IMAGE_SIZES, reduce_ratio
+        from limner.core.aspect import IMAGE_SIZES, reduce_ratio
 
         ratio = reduce_ratio(ratio)
         if ratio not in IMAGE_SIZES:

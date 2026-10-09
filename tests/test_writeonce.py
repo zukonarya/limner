@@ -34,3 +34,23 @@ def test_write_once_cleans_up_when_write_fails(tmp_path, monkeypatch):
     with pytest.raises(WriteOnceError, match="disk full"):
         write_once(tmp_path / "a.bin", b"x")
     assert list(tmp_path.iterdir()) == []
+
+
+@pytest.mark.parametrize("umask, expected", [(0o022, 0o644), (0o077, 0o600)])
+def test_write_once_mode_follows_umask(tmp_path, umask, expected):
+    old = os.umask(umask)
+    try:
+        write_once(tmp_path / "a.bin", b"x")
+    finally:
+        os.umask(old)
+    assert (tmp_path / "a.bin").stat().st_mode & 0o777 == expected
+
+
+def test_write_once_cleans_up_when_chmod_fails(tmp_path, monkeypatch):
+    def boom(*args, **kwargs):
+        raise OSError("operation not permitted")
+
+    monkeypatch.setattr(os, "fchmod", boom)
+    with pytest.raises(WriteOnceError, match="not permitted"):
+        write_once(tmp_path / "a.bin", b"x")
+    assert list(tmp_path.iterdir()) == []

@@ -1,3 +1,4 @@
+import os
 import pytest
 import sys
 from limner.providers import resolve_provider, VALID_PROVIDERS
@@ -107,13 +108,13 @@ from limner.generate_logo import build_output_path
 
 def test_output_path_with_file_contains_provider_and_stem(tmp_path):
     f = tmp_path / "v01.txt"
-    path = build_output_path(f, "gemini", "2026-06-04_14-30-00", tmp_path)
+    path = build_output_path(tmp_path, f.stem, "gemini", "2026-06-04_14-30-00")
     assert path.name == "v01_gemini_2026-06-04_14-30-00.png"
     assert path.parent == tmp_path
 
 
 def test_output_path_without_file_uses_output_dir(tmp_path):
-    path = build_output_path(None, "fal", "2026-06-04_14-30-00", tmp_path)
+    path = build_output_path(tmp_path, None, "fal", "2026-06-04_14-30-00")
     assert path.name == "fal_2026-06-04_14-30-00.png"
     assert path.parent == tmp_path
 
@@ -121,7 +122,7 @@ def test_output_path_without_file_uses_output_dir(tmp_path):
 def test_output_path_provider_in_filename_for_each_provider(tmp_path):
     f = tmp_path / "v01.txt"
     for provider in VALID_PROVIDERS:
-        path = build_output_path(f, provider, "2026-06-04_12-00-00", tmp_path)
+        path = build_output_path(tmp_path, f.stem, provider, "2026-06-04_12-00-00")
         assert provider in path.name
 
 
@@ -420,3 +421,131 @@ def test_live_fal_without_reference_exits_before_key_check(tmp_path):
     key.assert_not_called()
     generate.assert_not_called()
     assert list(tmp_path.iterdir()) == []
+
+
+# ── Test mode ───────────────────────────────────────────────────────────────
+
+import subprocess
+from PIL import Image
+from limner.core.receipt import build_receipt, sha256_text
+
+KEY_VARS = ["GEMINI_API_KEY", "FAL_KEY", "OPENAI_API_KEY"]
+
+
+def _no_keys(monkeypatch):
+    for var in KEY_VARS:
+        monkeypatch.delenv(var, raising=False)
+
+
+def _reference(tmp_path):
+    ref = tmp_path / "ref.png"
+    Image.new("RGB", (4, 4)).save(ref)
+    return ref
+
+
+def _run_test_mode(argv):
+    with patch.object(sys, "argv", ["limner-generate", "--test", *argv]), \
+         patch("limner.generate_logo.resolve_provider", side_effect=AssertionError("provider resolved")):
+        main()
+
+
+@pytest.mark.parametrize("provider", ["gemini", "fal", "openai", "composite"])
+def test_test_mode_writes_placeholder_and_test_receipt(provider, tmp_path, monkeypatch):
+    _no_keys(monkeypatch)
+    out = tmp_path / "out"
+    images = [] if provider == "gemini" else ["--image", str(_reference(tmp_path))]
+    _run_test_mode(["--provider", provider, "--output-dir", str(out), *images, "A blue square"])
+    [image] = (out / "test").glob("*.png")
+    receipt = json.loads(image.with_suffix(".run.json").read_text())
+    now = datetime.now(timezone.utc)
+    expected_keys = build_receipt(job_id="j", status="succeeded", provider=provider, prompt="p",
+                                  started_at=now, finished_at=now, duration_s=0).keys()
+    assert receipt.keys() == expected_keys
+    assert receipt["mode"] == "test"
+    assert receipt["status"] == "succeeded"
+    assert receipt["provider"] == provider
+    assert receipt["endpoint"] is None and receipt["model"] is None
+    assert receipt["settings_sent"] == {}
+    assert set(receipt["provider_response"].values()) == {None}
+    assert receipt["prompt_sha256"] == sha256_text("A blue square")
+    assert receipt["image"] == image.name
+    assert Image.open(image).size == (1024, 1024)
+
+
+def test_test_mode_with_file_leaves_prompt_folder_unchanged(tmp_path, monkeypatch):
+    _no_keys(monkeypatch)
+    project = tmp_path / "project"
+    project.mkdir()
+    f = _prompt_file(project)
+    out = tmp_path / "out"
+    _run_test_mode(["--file", str(f), "--output-dir", str(out)])
+    assert [p.name for p in project.iterdir()] == ["v01.txt"]
+    [image] = (out / "test").glob("*.png")
+    assert image.name.startswith("v01_gemini_")
+    assert json.loads(image.with_suffix(".run.json").read_text())["prompt_file"] == "v01.txt"
+
+
+def test_test_mode_fal_with_ratio_imports_no_provider_module(tmp_path):
+    ref = _reference(tmp_path)
+    code = (
+        "import sys; from limner.generate_logo import main; "
+        f"sys.argv = ['limner-generate', '--test', '--provider', 'fal', '-a', '16:9', "
+        f"'--image', {str(ref)!r}, '--output-dir', {str(tmp_path / 'out')!r}, 'p']; main(); "
+        "print('LEAK' if {'limner.providers.fal', 'fal_client'} & set(sys.modules) else 'CLEAN')"
+    )
+    env = {k: v for k, v in os.environ.items() if k not in KEY_VARS}
+    run = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True, env=env, cwd=tmp_path)
+    assert run.returncode == 0, run.stdout + run.stderr
+    assert run.stdout.strip().endswith("CLEAN")
+    [image] = (tmp_path / "out" / "test").glob("*.png")
+    assert Image.open(image).size == (1024, 576)
+
+
+@pytest.mark.parametrize("kind", ["link", "file"])
+def test_test_mode_refuses_test_root_that_is_not_a_folder(kind, tmp_path, monkeypatch, capsys):
+    _no_keys(monkeypatch)
+    out = tmp_path / "out"
+    out.mkdir()
+    elsewhere = tmp_path / "elsewhere"
+    elsewhere.mkdir()
+    if kind == "link":
+        (out / "test").symlink_to(elsewhere)
+    else:
+        (out / "test").write_text("x")
+    with pytest.raises(SystemExit) as exc:
+        _run_test_mode(["--output-dir", str(out), "p"])
+    assert exc.value.code == 1
+    assert "test folder" in capsys.readouterr().out
+    assert list(elsewhere.iterdir()) == []
+
+
+def _live_file_run(f, out, monkeypatch):
+    monkeypatch.setenv("GEMINI_API_KEY", "set")
+    generate = MagicMock()
+    with patch.object(sys, "argv", ["limner-generate", "--file", str(f), "--output-dir", str(out)]), \
+         patch("limner.generate_logo.resolve_provider", return_value=generate):
+        with pytest.raises(SystemExit) as exc:
+            main()
+    generate.assert_not_called()
+    return exc.value.code
+
+
+def test_live_run_refused_when_prompt_folder_is_in_test_root(tmp_path, monkeypatch, capsys):
+    out = tmp_path / "out"
+    inside = out / "test" / "sub"
+    inside.mkdir(parents=True)
+    f = _prompt_file(inside)
+    assert _live_file_run(f, out, monkeypatch) == 1
+    assert "test folder" in capsys.readouterr().out
+    assert [p.name for p in inside.iterdir()] == ["v01.txt"]
+
+
+def test_live_run_refused_for_linked_prompt_file_in_test_root(tmp_path, monkeypatch, capsys):
+    out = tmp_path / "out"
+    (out / "test").mkdir(parents=True)
+    real = _prompt_file(tmp_path)
+    link = out / "test" / "v01.txt"
+    link.symlink_to(real)
+    assert _live_file_run(link, out, monkeypatch) == 1
+    assert "test folder" in capsys.readouterr().out
+    assert [p.name for p in (out / "test").iterdir()] == ["v01.txt"]

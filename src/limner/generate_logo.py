@@ -6,13 +6,14 @@ from pathlib import Path
 
 from dotenv import load_dotenv
 
-from limner.core.config import resolve_output_dir
+from limner.core.config import resolve_output_dir, resolve_test_dir
 from limner.core.metadata import parse_header
+from limner.core.placeholder import render_placeholder
 from limner.core.receipt import build_receipt, new_job_id, redact_error, utc_now, write_receipt
 from limner.core.writeonce import WriteOnceError, write_once
 from limner.providers import resolve_provider
 from limner.providers.result import ProviderError
-from limner.core.validation import get_api_key, validate_images
+from limner.core.validation import get_api_key, validate_images, validate_provider
 
 load_dotenv()
 
@@ -51,6 +52,11 @@ def parse_args():
             "Output aspect ratio, e.g. 16:9 (gemini: any ratio, default 1:1; fal: 1:1, 4:3, 3:4, "
             "16:9, 9:16; or aspect_ratio from prompt file header)"
         ),
+    )
+    parser.add_argument(
+        "--test",
+        action="store_true",
+        help="Test run: write a placeholder image and a receipt to <output dir>/test; no provider is called and nothing is charged",
     )
     parser.add_argument(
         "prompt",
@@ -118,7 +124,7 @@ def resolve_aspect_ratio(args, provider):
         print(f"Error: aspect ratio '{ratio}' must be two positive integers separated by a colon, e.g. 16:9.")
         sys.exit(1)
     if provider == "fal":
-        from limner.providers.fal import IMAGE_SIZES, reduce_ratio
+        from limner.core.aspect import IMAGE_SIZES, reduce_ratio
 
         ratio = reduce_ratio(ratio)
         if ratio not in IMAGE_SIZES:
@@ -130,30 +136,72 @@ def resolve_aspect_ratio(args, provider):
     return ratio
 
 
-def build_output_path(
-    prompt_file: Path | None, provider: str, timestamp: str, output_dir: Path
-) -> Path:
-    if prompt_file is not None:
-        return prompt_file.parent / f"{prompt_file.stem}_{provider}_{timestamp}.png"
-    output_dir.mkdir(parents=True, exist_ok=True)
-    return output_dir / f"{provider}_{timestamp}.png"
+def build_output_path(folder: Path, stem: str | None, provider: str, timestamp: str) -> Path:
+    prefix = f"{stem}_" if stem else ""
+    return folder / f"{prefix}{provider}_{timestamp}.png"
+
+
+def prepare_test_dir(test_dir: Path) -> None:
+    # A link here could steer test files into a client folder, so only a real folder is accepted.
+    if test_dir.is_symlink() or (test_dir.exists() and not test_dir.is_dir()):
+        print(f"Error: the test folder {test_dir} must be a plain folder, not a link or a file.")
+        sys.exit(1)
+    test_dir.mkdir(parents=True, exist_ok=True)
+
+
+def refuse_live_write_into_test_dir(write_dir: Path, test_dir: Path) -> None:
+    write_dir, test_dir = write_dir.resolve(), test_dir.resolve()
+    if write_dir == test_dir or write_dir.is_relative_to(test_dir):
+        print(f"Error: a live run may not write into the test folder {test_dir}.")
+        sys.exit(1)
+
+
+def run_test_mode(output_path: Path, receipt_fields: dict, provider: str, aspect_ratio: str | None) -> None:
+    start = time.time()
+    image = render_placeholder(provider, aspect_ratio)
+    elapsed = time.time() - start
+    try:
+        write_once(output_path, image)
+        write_receipt(output_path.with_suffix(".run.json"), build_receipt(
+            **receipt_fields,
+            mode="test",
+            status="succeeded",
+            finished_at=utc_now(),
+            duration_s=elapsed,
+            image=output_path.name,
+        ))
+    except WriteOnceError as e:
+        print(f"Error: {e}")
+        sys.exit(1)
+    print("Test run: no provider was called and nothing was charged.")
+    print(f"Saved: {output_path}")
+    print(f"Receipt: {output_path.with_suffix('.run.json')}")
 
 
 def main():
     args = parse_args()
     output_dir = resolve_output_dir(args.output_dir)
     provider_name, images, prompt, prompt_file = resolve_config(args)
+    validate_provider(provider_name)
 
     aspect_ratio = resolve_aspect_ratio(args, provider_name)
 
     validate_images(images, provider_name)
-    get_api_key(provider_name)
 
-    generate_fn = resolve_provider(provider_name)
+    test_dir = resolve_test_dir(output_dir)
+    if args.test:
+        prepare_test_dir(test_dir)
+        folder = test_dir
+    else:
+        folder = prompt_file.parent if prompt_file else output_dir
+        refuse_live_write_into_test_dir(folder, test_dir)
+        get_api_key(provider_name)
+        generate_fn = resolve_provider(provider_name)
+        folder.mkdir(parents=True, exist_ok=True)
 
     started_at = utc_now()
     timestamp = started_at.astimezone().strftime("%Y-%m-%d_%H-%M-%S")
-    output_path = build_output_path(prompt_file, provider_name, timestamp, output_dir)
+    output_path = build_output_path(folder, prompt_file.stem if prompt_file else None, provider_name, timestamp)
     receipt_path = output_path.with_suffix(".run.json")
     for target in (output_path, receipt_path):
         if target.exists():
@@ -168,6 +216,10 @@ def main():
         prompt_file=prompt_file.name if prompt_file else None,
         references=images,
     )
+
+    if args.test:
+        run_test_mode(output_path, receipt_fields, provider_name, aspect_ratio)
+        return
 
     print(f"Generating with {provider_name}...")
     start = time.time()

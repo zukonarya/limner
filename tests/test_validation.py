@@ -1,6 +1,6 @@
 import pytest
 from pathlib import Path
-from limner.core.validation import validate_images, get_api_key
+from limner.core.validation import validate_images, validate_provider, get_api_key
 
 # --- validate_images ---
 
@@ -46,6 +46,25 @@ def test_validate_images_webp_accepted_by_openai(tmp_path):
 
 def test_validate_images_empty_list_passes():
     validate_images([], "gemini")  # text-only — must not raise
+
+
+@pytest.mark.parametrize("provider", ["fal", "openai", "composite"])
+def test_validate_images_requires_reference_for_edit_providers(provider, capsys):
+    with pytest.raises(SystemExit) as exc:
+        validate_images([], provider)
+    assert exc.value.code == 1
+    assert "reference image" in capsys.readouterr().out
+
+
+def test_validate_provider_unknown_exits_cleanly(capsys):
+    with pytest.raises(SystemExit) as exc:
+        validate_provider("dalle")
+    assert exc.value.code == 1
+    assert "unknown provider 'dalle'" in capsys.readouterr().out
+
+
+def test_validate_provider_known_passes():
+    validate_provider("composite")
 
 
 # --- get_api_key ---

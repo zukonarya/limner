@@ -1,7 +1,8 @@
 import pytest
 
 from limner.core.catalog import (
-    CatalogError, check_references, claim_version, find_version, store_reference, version_name,
+    CatalogError, check_references, claim_version, image_key, order_key, read_version_prompt, receipt_key,
+    reference_key, store_reference, version_in_phase, version_key, version_name, version_phases,
 )
 from limner.core.store import KeyExists, StoreError, open_store
 
@@ -86,10 +87,27 @@ def test_endless_exists_is_bounded():
     assert AlwaysTaken.calls == 100
 
 
-def test_find_version_returns_its_phase(store):
-    store.create("p/sessions/02-b/v05.txt", b"x")
-    assert find_version(store, "p", 5) == "02-b"
-    assert find_version(store, "p", 6) is None
+def test_version_lookup_handles_numbers_reused_across_legacy_phases(store):
+    store.create("p/sessions/01-a/v01.txt", b"first")
+    store.create("p/sessions/02-b/v01.txt", b"second")
+    assert version_phases(store, "p", 1) == ["01-a", "02-b"]
+    assert version_in_phase(store, "p", "02-b", 1)
+    assert not version_in_phase(store, "p", "03-c", 1)
+    assert read_version_prompt(store, "p", "02-b", 1) == b"second"
+    assert version_phases(store, "p", 2) == []
+
+
+def test_three_digit_versions_are_counted(store):
+    store.create("p/sessions/01-a/v100.txt", b"x")
+    assert claim_version(store, "p") == 101
+
+
+def test_keys_follow_the_adr_layout():
+    assert version_key("p", "01-a", 3) == "p/sessions/01-a/v03.txt"
+    assert order_key("p", "01-a", 3, "J") == "p/sessions/01-a/v03_job-J.order.json"
+    assert image_key("p", "01-a", 3, "fal", "J") == "p/sessions/01-a/v03_fal_J.png"
+    assert receipt_key("p", "01-a", 3, "fal", "J") == "p/sessions/01-a/v03_fal_J.run.json"
+    assert reference_key("p", "a.png") == "p/references/a.png"
 
 
 def test_store_reference_writes_then_reuses(store):
@@ -110,7 +128,9 @@ def test_check_references_accepts_new_and_identical(store):
         [("a.png", b"other")],
         [("A.png", b"img")],
         [("x.png", b"1"), ("X.png", b"2")],
+        [("x.png", b"1"), ("X.png", b"1")],
         [("crops", b"x")],
+        [("sub/a.png", b"x")],
     ],
 )
 def test_check_references_refuses_conflicts(store, refs):
@@ -122,3 +142,22 @@ def test_check_references_refuses_conflicts(store, refs):
 
 def test_same_name_twice_with_same_bytes_is_fine(store):
     check_references(store, "p", [("x.png", b"1"), ("x.png", b"1")])
+
+
+@pytest.mark.parametrize("make", ["empty folder", "broken link"])
+def test_stored_name_that_is_not_a_file_is_refused(tmp_path, make):
+    store = open_store(tmp_path, must_exist=True)
+    refs = tmp_path / "p" / "references"
+    refs.mkdir(parents=True)
+    if make == "empty folder":
+        (refs / "a.png").mkdir()
+    else:
+        (refs / "a.png").symlink_to(tmp_path / "nowhere")
+    with pytest.raises(CatalogError):
+        check_references(store, "p", [("a.png", b"x")])
+
+
+def test_store_reference_refuses_a_case_variant_of_a_stored_name(store):
+    store.create("p/references/a.png", b"img")
+    with pytest.raises(CatalogError):
+        store_reference(store, "p", "A.png", b"img")

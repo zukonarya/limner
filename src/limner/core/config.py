@@ -23,3 +23,9 @@ def resolve_output_dir(override: Path | None = None) -> Path:
 def resolve_test_dir(output_dir: Path) -> Path:
     # Left unresolved so the caller can refuse a link here before writing.
     return Path(output_dir) / "test"
+
+
+def resolve_store_root() -> Path | None:
+    # Whether the root is usable is the store factory's decision, not this module's.
+    value = os.environ.get("LIMNER_STORE_DIR", "").strip()
+    return Path(value).expanduser().resolve() if value else None

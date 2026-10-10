@@ -1,4 +1,5 @@
 """Validation of an order form (ADR-0004 section 3). Nothing here writes; every refusal raises OrderError."""
+import hashlib
 import json
 import math
 import os
@@ -6,16 +7,17 @@ import re
 import stat
 from dataclasses import dataclass
 from pathlib import Path
+from types import MappingProxyType
 
 from limner.core import catalog
 from limner.core.aspect import AspectError, check_aspect_ratio
 from limner.core.catalog import CatalogError
 from limner.core.store import StoreError
-from limner.core.validation import NEEDS_REFERENCE, SUPPORTED_EXTENSIONS
-from limner.providers import VALID_PROVIDERS
+from limner.core.validation import InputError, check_provider, check_reference_rules
 
 MAX_ORDER_BYTES = 1_000_000
 MAX_REFERENCE_BYTES = 20 * 1024 * 1024
+MAX_REFERENCES = 20
 
 _SLUG = r"[a-z0-9]+(-[a-z0-9]+)*"
 _PATTERNS = {
@@ -46,11 +48,13 @@ class Reference:
     label: str
     source: Path
     data: bytes
+    sha256: str
 
 
 @dataclass(frozen=True)
 class Order:
-    fields: dict
+    fields: MappingProxyType  # the order as received, read-only; build the stored form from a copy
+    workspace: Path
     project: str
     phase: str
     version: int | None
@@ -162,43 +166,56 @@ def _check_fields(order: dict) -> None:
 
 
 def _inside(path: str, workspace: Path) -> Path:
-    resolved = (workspace / path).resolve()
+    try:
+        resolved = (workspace / path).resolve()
+    except (ValueError, OSError):
+        raise OrderError(f"{_show(path)} is not a usable path.") from None
     if not resolved.is_relative_to(workspace):
         raise OrderError(f"{_show(path)} is outside the caller workspace.")
     return resolved
 
 
-def _read_reference(source: str, workspace: Path) -> tuple[Path, bytes]:
-    resolved = _inside(source, workspace)
+# The resolved path holds no links, so refusing any link on the way closes the gap between resolving and
+# opening; O_NONBLOCK keeps a named pipe from blocking before the regular-file check.
+_OPEN_FLAGS = os.O_RDONLY | os.O_NONBLOCK | getattr(os, "O_NOFOLLOW_ANY", getattr(os, "O_NOFOLLOW", 0))
+
+
+def _read(resolved: Path, shown: str) -> bytes:
     try:
-        fd = os.open(resolved, os.O_RDONLY)
+        fd = os.open(resolved, _OPEN_FLAGS)
     except OSError:
-        raise OrderError(f"Reference {_show(source)} can't be opened.") from None
+        raise OrderError(f"Reference {shown} can't be opened.") from None
+    # Checked on the open handle, so the file read is the file checked.
+    if not stat.S_ISREG(os.fstat(fd).st_mode):
+        os.close(fd)
+        raise OrderError(f"Reference {shown} is not a regular file.")
     with os.fdopen(fd, "rb") as f:
-        # Checked on the open handle, so the file read is the file checked.
-        if not stat.S_ISREG(os.fstat(f.fileno()).st_mode):
-            raise OrderError(f"Reference {_show(source)} is not a regular file.")
         data = f.read(MAX_REFERENCE_BYTES + 1)
     if len(data) > MAX_REFERENCE_BYTES:
-        raise OrderError(f"Reference {_show(source)} is larger than 20 MB.")
-    return resolved, data
+        raise OrderError(f"Reference {shown} is larger than 20 MB.")
+    return data
 
 
 def _references(order: dict, workspace: Path) -> tuple[Reference, ...]:
-    provider = order["provider"]
-    if provider not in VALID_PROVIDERS:
-        raise OrderError(f"Unknown provider {_show(provider)}. Valid: {', '.join(VALID_PROVIDERS)}.")
-    if not order["references"] and provider in NEEDS_REFERENCE:
-        raise OrderError(f"Provider '{provider}' needs at least one reference in references.")
-    result = []
-    for item in order["references"]:
-        name = Path(item["source"]).name
+    items = order["references"]
+    if len(items) > MAX_REFERENCES:
+        raise OrderError(f"An order may carry at most {MAX_REFERENCES} references.")
+    names = [Path(item["source"]).name for item in items]
+    for name in names:
         if not _REFERENCE_NAME.fullmatch(name) or ".." in name:
             raise OrderError(f"Reference name {_show(name)} does not match its name pattern.")
-        if Path(name).suffix.lower() not in SUPPORTED_EXTENSIONS[provider]:
-            raise OrderError(f"Reference {_show(name)} is not a type '{provider}' accepts.")
-        source, data = _read_reference(item["source"], workspace)
-        result.append(Reference(name, item["label"], source, data))
+    try:
+        check_reference_rules(order["provider"], names, "references")
+    except InputError as e:
+        raise OrderError(str(e)) from None
+    held: dict[Path, bytes] = {}
+    result = []
+    for item, name in zip(items, names):
+        source = _inside(item["source"], workspace)
+        if source not in held:
+            held[source] = _read(source, _show(item["source"]))
+        data = held[source]
+        result.append(Reference(name, item["label"], source, data, hashlib.sha256(data).hexdigest()))
     return tuple(result)
 
 
@@ -227,27 +244,32 @@ def parse_fields(raw: bytes) -> dict:
 
 
 def parse_order(raw: bytes, workspace: Path, store) -> Order:
-    """workspace is the resolved caller workspace, already checked by the CLI to hold no store."""
+    """workspace is the resolved caller workspace, already checked by the CLI to hold no store.
+    Cheap checks run before any file is read."""
     order = parse_fields(raw)
-    aspect_ratio = order["settings"].get("aspect_ratio")
-    if set(order["settings"]) - {"aspect_ratio"}:
+    settings = order["settings"]
+    if set(settings) - {"aspect_ratio"}:
         raise OrderError("settings may only contain aspect_ratio.")
-    references = _references(order, workspace)
+    try:
+        check_provider(order["provider"])
+        aspect_ratio = check_aspect_ratio(settings["aspect_ratio"], order["provider"]) if "aspect_ratio" in settings else None
+    except (InputError, AspectError) as e:
+        raise OrderError(str(e)) from None
     return_dir = _inside(order["return_dir"], workspace)
-    if not return_dir.is_dir():
+    try:
+        is_folder = return_dir.is_dir()
+    except OSError:
+        is_folder = False
+    if not is_folder:
         raise OrderError("return_dir must be an existing folder.")
-    if aspect_ratio is not None:
-        try:
-            aspect_ratio = check_aspect_ratio(aspect_ratio, order["provider"])
-        except AspectError as e:
-            raise OrderError(str(e)) from None
+    references = _references(order, workspace)
     try:
         _check_store(order, references, store)
     except (CatalogError, StoreError) as e:
         raise OrderError(str(e)) from None
     return Order(
-        fields=order, project=order["project"], phase=order["phase"], version=order.get("version"),
-        parent_version=order.get("parent_version"), prompt=order["prompt"], provider=order["provider"],
-        aspect_ratio=aspect_ratio, references=references, return_dir=return_dir,
+        fields=MappingProxyType(order), workspace=workspace, project=order["project"], phase=order["phase"],
+        version=order.get("version"), parent_version=order.get("parent_version"), prompt=order["prompt"],
+        provider=order["provider"], aspect_ratio=aspect_ratio, references=references, return_dir=return_dir,
         caller_name=order.get("caller_name"),
     )

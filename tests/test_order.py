@@ -1,4 +1,5 @@
 import json
+import os
 
 import pytest
 
@@ -157,7 +158,16 @@ def test_valid_order_is_returned_with_held_bytes(ws, store):
         {"settings": {"aspect_ratio": "2:1"}},
         {"provider": "dalle"},
         {"references": []},
+        {"settings": {"aspect_ratio": None}},
+        {"settings": {"aspect_ratio": "9" * 5000 + ":1"}},
+        {"references": [{"source": "x\u0000/ref.png", "label": "x"}]},
+        {"references": [{"source": "d" * 5000 + "/ref.png", "label": "x"}]},
+        {"return_dir": "o\u0000ut"},
+        {"return_dir": "d" * 5000},
+        {"references": [{"source": "ref.png", "label": "x"}] * 21},
     ],
+    ids=["seed", "number", "unsupported", "provider", "no refs", "null ratio", "huge ratio", "nul source",
+         "long source", "nul return", "long return", "too many refs"],
 )
 def test_invalid_settings_and_provider_are_refused(changes, ws, store):
     with pytest.raises(OrderError):
@@ -181,9 +191,14 @@ def test_reference_link_pointing_outside_is_refused(ws, store, tmp_path):
         _parse(_order(references=[{"source": "link.png", "label": "x"}]), ws, store)
 
 
-@pytest.mark.parametrize("make", ["missing", "folder", "bad name", "bad type"])
+@pytest.mark.parametrize("make", ["missing", "folder", "fifo", "bad name", "bad type"])
 def test_bad_reference_files_are_refused(make, ws, store):
-    source = {"missing": "gone.png", "folder": "out", "bad name": "my photo.png", "bad type": "ref.gif"}[make]
+    source = {"missing": "gone.png", "folder": "dir.png", "fifo": "pipe.png", "bad name": "my photo.png",
+              "bad type": "ref.gif"}[make]
+    if make == "folder":
+        (ws / "dir.png").mkdir()
+    if make == "fifo":
+        os.mkfifo(ws / "pipe.png")
     if make == "bad name":
         (ws / "my photo.png").write_bytes(b"x")
     if make == "bad type":
@@ -228,3 +243,29 @@ def test_stored_reference_conflict_is_refused(ws, store):
     store.create("demo-site/references/ref.png", b"other bytes")
     with pytest.raises(OrderError):
         _parse(_order(), ws, store)
+
+
+def test_order_carries_workspace_hashes_and_frozen_fields(ws, store):
+    order = _parse(_order(), ws, store)
+    assert order.workspace == ws.resolve()
+    assert order.references[0].sha256 == __import__("hashlib").sha256(b"png-bytes").hexdigest()
+    with pytest.raises(TypeError):
+        order.fields["project"] = "other"
+
+
+def test_repeated_reference_is_read_once(ws, store, monkeypatch):
+    opened = []
+    real_open = os.open
+    monkeypatch.setattr(os, "open", lambda path, *a, **k: opened.append(path) or real_open(path, *a, **k))
+    order = _parse(_order(references=[{"source": "ref.png", "label": "x"}] * 3), ws, store)
+    assert len(order.references) == 3 and len(opened) == 1
+
+
+def test_references_differing_only_in_case_are_refused(ws, store):
+    (ws / "a").mkdir()
+    (ws / "b").mkdir()
+    (ws / "a" / "x.png").write_bytes(b"1")
+    (ws / "b" / "X.png").write_bytes(b"2")
+    refs = [{"source": "a/x.png", "label": "1"}, {"source": "b/X.png", "label": "2"}]
+    with pytest.raises(OrderError, match="case"):
+        _parse(_order(references=refs), ws, store)

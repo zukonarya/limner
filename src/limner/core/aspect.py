@@ -25,7 +25,8 @@ def check_aspect_ratio(ratio: str, provider: str) -> str:
     if not isinstance(ratio, str):
         raise AspectError("aspect ratio must be text such as 16:9.")
     ratio = ratio.strip()
-    match = re.fullmatch(r"([0-9]+):([0-9]+)", ratio)
+    # Bounded digits keep int() below Python's conversion limit.
+    match = re.fullmatch(r"([0-9]{1,6}):([0-9]{1,6})", ratio)
     if not match or not all(int(n) > 0 for n in match.groups()):
         raise AspectError(f"aspect ratio {ratio[:40]!r} must be two positive integers separated by a colon, e.g. 16:9.")
     if provider == "fal":

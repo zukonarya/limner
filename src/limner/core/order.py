@@ -48,11 +48,32 @@ def _load(raw: bytes) -> dict:
         raise OrderError("The order is larger than 1 MB.")
     try:
         data = json.loads(raw.decode("utf-8"), object_pairs_hook=_no_duplicates, parse_constant=_no_constants)
-    except (UnicodeDecodeError, json.JSONDecodeError):
+    except (ValueError, RecursionError):
+        # ValueError covers bad UTF-8, bad JSON and integers past Python's digit limit.
         raise OrderError("The order is not UTF-8 JSON.") from None
     if not isinstance(data, dict):
         raise OrderError("The order must be a JSON object.")
+    try:
+        _check_encodable(data)
+    except RecursionError:
+        raise OrderError("The order is nested too deeply.") from None
     return data
+
+
+def _check_encodable(value) -> None:
+    # JSON escapes can carry lone surrogates, which can't be written as UTF-8 later.
+    if isinstance(value, str):
+        try:
+            value.encode("utf-8")
+        except UnicodeEncodeError:
+            raise OrderError("The order contains text that is not valid UTF-8.") from None
+    elif isinstance(value, dict):
+        for key, item in value.items():
+            _check_encodable(key)
+            _check_encodable(item)
+    elif isinstance(value, list):
+        for item in value:
+            _check_encodable(item)
 
 
 def _is(value, kind) -> bool:
@@ -82,7 +103,7 @@ def _check_fields(order: dict) -> None:
     if order["action"] != "send":
         raise OrderError("action must be \"send\".")
     for key in ("prompt", "approval"):
-        if not order[key].strip():
+        if not order[key]:
             raise OrderError(f"{key} may not be empty.")
     for key in ("version", "parent_version"):
         if key in order and order[key] < 1:

@@ -39,8 +39,12 @@ def _order(**changes):
         b"\xff\xfe",
         b'{"a": 1, "a": 2}',
         b'{"amount": NaN}',
-        b"{" + b" " * MAX_ORDER_BYTES + b"}",
+        b'{"adjustments": [{"rule": "r", "rule": "s", "before": "a", "after": "b"}]}',
+        b'{"version": ' + b"9" * 5000 + b"}",
+        b"[" * 100_000,
+        b'{"prompt": "\\ud800"}',
     ],
+    ids=["empty", "text", "list", "not utf8", "duplicate", "nan", "nested duplicate", "huge int", "deep", "surrogate"],
 )
 def test_malformed_input_is_refused(raw):
     with pytest.raises(OrderError):
@@ -53,6 +57,11 @@ def test_malformed_input_is_refused(raw):
         {"schema_version": "2"},
         {"action": "draft"},
         {"project": ...},
+        {"routing_rule": ...},
+        {"routing_rule": 7},
+        {"approval": ...},
+        {"adjustments": {}},
+        {"settings": []},
         {"prompt": ""},
         {"approval": ""},
         {"surprise": 1},
@@ -91,3 +100,18 @@ def test_error_messages_carry_no_control_characters():
     with pytest.raises(OrderError) as exc:
         parse_fields(_order(project="\x1b[31mevil"))
     assert "\x1b" not in str(exc.value)
+
+
+def test_size_cap_refuses_an_otherwise_valid_order():
+    padded = _order(user_words="x" * MAX_ORDER_BYTES)
+    with pytest.raises(OrderError, match="1 MB"):
+        parse_fields(padded)
+
+
+def test_lone_surrogate_anywhere_is_refused():
+    with pytest.raises(OrderError, match="UTF-8"):
+        parse_fields(_order(prompt="ok", user_words="\ud800"))
+
+
+def test_whitespace_prompt_is_not_empty():
+    assert parse_fields(_order(prompt=" "))["prompt"] == " "

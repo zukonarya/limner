@@ -2,6 +2,14 @@ import pytest
 from pathlib import Path
 
 
+@pytest.fixture(autouse=True)
+def isolated_store_root(tmp_path, monkeypatch):
+    """Keeps every test away from the live store that code/.env names; load_dotenv never overrides a set value."""
+    root = tmp_path / "live-store"
+    monkeypatch.setenv("LIMNER_STORE_DIR", str(root))
+    return root
+
+
 @pytest.fixture
 def prompt_file_with_header(tmp_path):
     """A .txt prompt file with a full metadata header."""

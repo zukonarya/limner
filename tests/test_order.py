@@ -2,8 +2,22 @@ import json
 
 import pytest
 
-from limner.core.order import MAX_ORDER_BYTES, OrderError, parse_fields
+from limner.core.order import MAX_ORDER_BYTES, OrderError, parse_fields, parse_order
+from limner.core.store import open_store
 
+
+
+@pytest.fixture
+def ws(tmp_path):
+    workspace = tmp_path / "ws"
+    (workspace / "out").mkdir(parents=True)
+    (workspace / "ref.png").write_bytes(b"png-bytes")
+    return workspace
+
+
+@pytest.fixture
+def store(tmp_path):
+    return open_store(tmp_path / "store", must_exist=False)
 
 
 def _order(**changes):
@@ -115,3 +129,102 @@ def test_lone_surrogate_anywhere_is_refused():
 
 def test_whitespace_prompt_is_not_empty():
     assert parse_fields(_order(prompt=" "))["prompt"] == " "
+
+
+# ── References, paths and the store ─────────────────────────────────────────
+
+
+def _parse(raw, ws, store):
+    return parse_order(raw, ws.resolve(), store)
+
+
+def test_valid_order_is_returned_with_held_bytes(ws, store):
+    order = _parse(_order(caller_name="demo-caller", settings={"aspect_ratio": "16:9"}), ws, store)
+    assert order.project == "demo-site" and order.phase == "01-nav"
+    assert order.version is None and order.caller_name == "demo-caller"
+    assert order.aspect_ratio == "16:9"
+    [ref] = order.references
+    assert (ref.name, ref.label, ref.data) == ("ref.png", "logo", b"png-bytes")
+    assert ref.source == (ws / "ref.png").resolve()
+    assert order.return_dir == (ws / "out").resolve()
+
+
+@pytest.mark.parametrize(
+    "changes",
+    [
+        {"settings": {"seed": 1}},
+        {"settings": {"aspect_ratio": 16}},
+        {"settings": {"aspect_ratio": "2:1"}},
+        {"provider": "dalle"},
+        {"references": []},
+    ],
+)
+def test_invalid_settings_and_provider_are_refused(changes, ws, store):
+    with pytest.raises(OrderError):
+        _parse(_order(**changes), ws, store)
+
+
+def test_gemini_may_run_without_references(ws, store):
+    assert _parse(_order(provider="gemini", references=[]), ws, store).references == ()
+
+
+def test_reference_outside_the_workspace_is_refused(ws, store, tmp_path):
+    (tmp_path / "elsewhere.png").write_bytes(b"x")
+    with pytest.raises(OrderError):
+        _parse(_order(references=[{"source": str(tmp_path / "elsewhere.png"), "label": "x"}]), ws, store)
+
+
+def test_reference_link_pointing_outside_is_refused(ws, store, tmp_path):
+    (tmp_path / "secret.png").write_bytes(b"x")
+    (ws / "link.png").symlink_to(tmp_path / "secret.png")
+    with pytest.raises(OrderError):
+        _parse(_order(references=[{"source": "link.png", "label": "x"}]), ws, store)
+
+
+@pytest.mark.parametrize("make", ["missing", "folder", "bad name", "bad type"])
+def test_bad_reference_files_are_refused(make, ws, store):
+    source = {"missing": "gone.png", "folder": "out", "bad name": "my photo.png", "bad type": "ref.gif"}[make]
+    if make == "bad name":
+        (ws / "my photo.png").write_bytes(b"x")
+    if make == "bad type":
+        (ws / "ref.gif").write_bytes(b"x")
+    with pytest.raises(OrderError):
+        _parse(_order(references=[{"source": source, "label": "x"}]), ws, store)
+
+
+def test_oversized_reference_is_refused(ws, store, monkeypatch):
+    monkeypatch.setattr("limner.core.order.MAX_REFERENCE_BYTES", 4)
+    with pytest.raises(OrderError):
+        _parse(_order(), ws, store)
+
+
+@pytest.mark.parametrize("return_dir", ["missing", "ref.png", "/tmp"])
+def test_bad_return_dir_is_refused(return_dir, ws, store):
+    with pytest.raises(OrderError):
+        _parse(_order(return_dir=return_dir), ws, store)
+
+
+def test_existing_version_must_match_phase_and_prompt(ws, store):
+    store.create("demo-site/sessions/01-nav/v03.txt", b"A blue square")
+    assert _parse(_order(version=3), ws, store).version == 3
+    with pytest.raises(OrderError):
+        _parse(_order(version=3, prompt="A red square"), ws, store)
+    with pytest.raises(OrderError):
+        _parse(_order(version=3, phase="02-hero"), ws, store)
+    with pytest.raises(OrderError):
+        _parse(_order(version=4), ws, store)
+
+
+def test_parent_version_must_exist_and_be_lower(ws, store):
+    store.create("demo-site/sessions/01-nav/v03.txt", b"A blue square")
+    assert _parse(_order(parent_version=3), ws, store).parent_version == 3
+    with pytest.raises(OrderError):
+        _parse(_order(parent_version=7), ws, store)
+    with pytest.raises(OrderError):
+        _parse(_order(version=3, parent_version=3), ws, store)
+
+
+def test_stored_reference_conflict_is_refused(ws, store):
+    store.create("demo-site/references/ref.png", b"other bytes")
+    with pytest.raises(OrderError):
+        _parse(_order(), ws, store)

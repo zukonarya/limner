@@ -2,7 +2,7 @@ import os
 
 import pytest
 
-from limner.core.writeonce import WriteOnceError, write_once
+from limner.core.writeonce import WriteOnceError, WriteOnceExists, write_once
 
 
 def test_write_once_creates_file(tmp_path):
@@ -54,3 +54,10 @@ def test_write_once_cleans_up_when_chmod_fails(tmp_path, monkeypatch):
     with pytest.raises(WriteOnceError, match="not permitted"):
         write_once(tmp_path / "a.bin", b"x")
     assert list(tmp_path.iterdir()) == []
+
+
+def test_taken_name_is_reported_as_exists(tmp_path):
+    target = tmp_path / "a.bin"
+    target.write_bytes(b"x")
+    with pytest.raises(WriteOnceExists):
+        write_once(target, b"y")

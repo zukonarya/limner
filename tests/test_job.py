@@ -183,3 +183,15 @@ def test_no_written_file_holds_the_absolute_store_root(ws, store, tmp_path):
     root = str((tmp_path / "store").resolve()).encode()
     for key in store.list(""):
         assert root not in store.read(key), key
+
+
+def test_an_unexpected_error_after_the_prompt_still_ends_with_a_failed_receipt(ws, store, monkeypatch):
+    def no_space(*args, **kwargs):
+        raise OSError("no space left")
+
+    monkeypatch.setattr(job_module.tempfile, "TemporaryDirectory", no_space)
+    with pytest.raises(JobError) as exc:
+        run_job(store, _order(ws, store), "live", MagicMock())
+    assert [label for label, _ in exc.value.written] == ["Prompt", "Reference", "Order", "Receipt"]
+    receipt = _json(store, exc.value.written[-1][1])
+    assert (receipt["status"], receipt["error"]["type"]) == ("failed", "OSError")

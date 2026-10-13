@@ -123,7 +123,10 @@ def run_job(store, order, mode: str, generate) -> list[tuple[str, str]]:
             image = catalog.image_key(project, phase, number, provider, job_id)
             store.create(image, image_bytes)
             written.append(("Image", image))
-        except (CatalogError, StoreError) as e:
+        except (JobError, _Failed):
+            raise
+        except Exception as e:
+            # Any failure once the prompt exists, expected or not, must leave a receipt.
             raise _Failed(e) from e
     except _Failed as failure:
         _fail_with_receipt(store, receipt, receipt_fields, failure, time.time() - start, written)

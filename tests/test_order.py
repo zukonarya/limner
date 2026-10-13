@@ -261,11 +261,18 @@ def test_repeated_reference_is_read_once(ws, store, monkeypatch):
     assert len(order.references) == 3 and len(opened) == 1
 
 
-def test_references_differing_only_in_case_are_refused(ws, store):
+@pytest.mark.parametrize("other_bytes", [b"2", b"1"])
+def test_references_differing_only_in_case_are_refused(ws, store, other_bytes):
     (ws / "a").mkdir()
     (ws / "b").mkdir()
     (ws / "a" / "x.png").write_bytes(b"1")
-    (ws / "b" / "X.png").write_bytes(b"2")
+    (ws / "b" / "X.png").write_bytes(other_bytes)
     refs = [{"source": "a/x.png", "label": "1"}, {"source": "b/X.png", "label": "2"}]
     with pytest.raises(OrderError, match="case"):
         _parse(_order(references=refs), ws, store)
+
+
+def test_stored_case_variant_is_refused_even_with_equal_bytes(ws, store):
+    store.create("demo-site/references/REF.png", b"png-bytes")
+    with pytest.raises(OrderError, match="clashes"):
+        _parse(_order(), ws, store)

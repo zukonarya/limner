@@ -22,27 +22,47 @@ API_KEY_VARS: dict[str, str] = {
 }
 
 
-def validate_provider(provider: str) -> None:
+class InputError(ValueError):
+    pass
+
+
+def check_provider(provider: str) -> None:
     if provider not in VALID_PROVIDERS:
-        print(f"Error: unknown provider '{provider}'. Valid: {', '.join(VALID_PROVIDERS)}")
+        raise InputError(f"unknown provider {provider[:40]!r}. Valid: {', '.join(VALID_PROVIDERS)}")
+
+
+def check_reference_rules(provider: str, names: list[str], where: str) -> None:
+    """The provider's reference rules, shared by plain mode and orders; `where` names the caller's input."""
+    if not names and provider in NEEDS_REFERENCE:
+        raise InputError(f"provider '{provider}' needs at least one reference image ({where}).")
+    supported = SUPPORTED_EXTENSIONS[provider]
+    for name in names:
+        suffix = Path(name).suffix
+        if suffix.lower() not in supported:
+            raise InputError(
+                f"unsupported image type {suffix[:20]!r} for provider '{provider}'.\n"
+                f"Supported: {', '.join(sorted(supported))}"
+            )
+
+
+def validate_provider(provider: str) -> None:
+    try:
+        check_provider(provider)
+    except InputError as e:
+        print(f"Error: {e}")
         sys.exit(1)
 
 
 def validate_images(images: list[Path], provider: str) -> None:
-    if not images and provider in NEEDS_REFERENCE:
-        print(f"Error: provider '{provider}' needs at least one reference image (--image).")
-        sys.exit(1)
-    supported = SUPPORTED_EXTENSIONS[provider]
     for path in images:
         if not path.exists():
             print(f"Error: image file not found: {path}")
             sys.exit(1)
-        if path.suffix.lower() not in supported:
-            print(
-                f"Error: unsupported image type '{path.suffix}' for provider '{provider}'.\n"
-                f"Supported: {', '.join(sorted(supported))}"
-            )
-            sys.exit(1)
+    try:
+        check_reference_rules(provider, [str(p) for p in images], "--image")
+    except InputError as e:
+        print(f"Error: {e}")
+        sys.exit(1)
 
 
 def get_api_key(provider: str) -> str:

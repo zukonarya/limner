@@ -93,8 +93,9 @@ def parse_args():
 
     if args.order:
         if args.file or args.prompt or args.provider or args.images or args.aspect_ratio:
-            parser.error("--order takes the prompt, provider, references and settings from the order form; "
-                         "--file, an inline prompt, --provider, --image and -a can't be used with it.")
+            # Store mode's contract is exit 1 with an Error: line, not argparse's exit 2.
+            _refuse("--order takes the prompt, provider, references and settings from the order form; "
+                    "--file, an inline prompt, --provider, --image and -a can't be used with it.")
         return args
     if args.workspace:
         parser.error("--workspace is only used with --order.")

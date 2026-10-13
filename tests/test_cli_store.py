@@ -103,10 +103,9 @@ def test_validation_failures_write_nothing(raw, ws, live, tmp_path, monkeypatch,
 @pytest.mark.parametrize("extra", [["--file", "p.txt"], ["--provider", "fal"], ["--image", "a.png"],
                                    ["-a", "1:1"], ["inline prompt"]])
 def test_plain_mode_options_are_refused_with_order(extra, ws, live, monkeypatch, capsys):
-    with pytest.raises(SystemExit) as exc, patch.object(sys, "argv", ["limner-generate", "--order", *extra]):
-        main()
-    assert exc.value.code == 2
-    assert "--order" in capsys.readouterr().err
+    assert _run(extra, _order(), monkeypatch) == 1
+    assert capsys.readouterr().out.startswith("Error: ")
+    assert _files(live) == []
 
 
 @pytest.mark.parametrize("value", ["", "missing", "file"])

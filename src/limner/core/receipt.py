@@ -74,7 +74,7 @@ def build_receipt(
     model: str | None = None,
     settings_sent: dict | None = None,
     prompt_file: str | None = None,
-    references: list[Path] | None = None,
+    references: list[Path | dict] | None = None,
     provider_response: dict | None = None,
     image: str | None = None,
     mode: str = "live",
@@ -100,8 +100,10 @@ def build_receipt(
         "settings_sent": settings_sent or {},
         "prompt_file": prompt_file,
         "prompt_sha256": sha256_text(prompt),
+        # Store mode passes records already keyed and hashed; plain mode passes the files it sent.
         "references": [
-            {"stored": str(ref), "sha256": sha256_file(ref)} for ref in (references or [])
+            ref if isinstance(ref, dict) else {"stored": str(ref), "sha256": sha256_file(ref)}
+            for ref in (references or [])
         ],
         "provider_response": response,
         "started_at": started_at.astimezone(timezone.utc).isoformat(),

@@ -6,10 +6,13 @@ from pathlib import Path
 from dotenv import load_dotenv
 
 from limner.core.aspect import AspectError, check_aspect_ratio
-from limner.core.config import resolve_output_dir, resolve_test_dir
+from limner.core.config import resolve_output_dir, resolve_store_root, resolve_test_dir
+from limner.core.job import JobError, run_job
 from limner.core.metadata import parse_header
+from limner.core.order import MAX_ORDER_BYTES, OrderError, parse_order
 from limner.core.placeholder import render_placeholder
 from limner.core.receipt import build_receipt, new_job_id, redact_error, utc_now, write_receipt
+from limner.core.store import StoreError, open_store
 from limner.core.writeonce import WriteOnceError, write_once
 from limner.providers import resolve_provider
 from limner.providers.result import ProviderError
@@ -59,6 +62,17 @@ def parse_args():
         help="Test run: write a placeholder image and a receipt to <output dir>/test; no provider is called and nothing is charged",
     )
     parser.add_argument(
+        "--order",
+        action="store_true",
+        help="Store mode: read one order form as JSON from standard input and file the job in the store",
+    )
+    parser.add_argument(
+        "--workspace",
+        type=Path,
+        metavar="DIR",
+        help="Store mode: the caller's workspace (default: the current folder)",
+    )
+    parser.add_argument(
         "prompt",
         nargs="?",
         help="Inline prompt text (mutually exclusive with --file)",
@@ -77,6 +91,14 @@ def parse_args():
 
     args = parser.parse_args()
 
+    if args.order:
+        if args.file or args.prompt or args.provider or args.images or args.aspect_ratio:
+            # Store mode's contract is exit 1 with an Error: line, not argparse's exit 2.
+            _refuse("--order takes the prompt, provider, references and settings from the order form; "
+                    "--file, an inline prompt, --provider, --image and -a can't be used with it.")
+        return args
+    if args.workspace:
+        parser.error("--workspace is only used with --order.")
     if args.file and args.prompt:
         parser.error("--file and inline prompt are mutually exclusive.")
     if not args.file and not args.prompt:
@@ -167,8 +189,83 @@ def run_test_mode(output_path: Path, receipt_fields: dict, provider: str, aspect
     print(f"Receipt: {output_path.with_suffix('.run.json')}")
 
 
+def _refuse(message) -> None:
+    # One line, printable only: the agent reads labelled lines, so error text must not be able to forge one.
+    text = "".join(c if c.isprintable() else " " for c in str(message))
+    print(f"Error: {text}")
+    sys.exit(1)
+
+
+def _require_plain_folder(path: Path, what: str) -> None:
+    if path.is_symlink() or (path.exists() and not path.is_dir()):
+        _refuse(f"{what} {path} must be a plain folder, not a link or a file.")
+
+
+def _overlap(a: Path, b: Path) -> bool:
+    return a == b or a.is_relative_to(b) or b.is_relative_to(a)
+
+
+def resolve_store_mode_roots(args) -> tuple[Path, Path]:
+    """The caller workspace and the store root, checked against each other without creating anything."""
+    workspace = (args.workspace or Path.cwd()).expanduser().resolve()
+    if workspace == Path(workspace.anchor) or workspace == Path.home().resolve():
+        _refuse("the workspace may not be the root folder or the home folder.")
+    if not workspace.is_dir():
+        _refuse("the workspace must be an existing folder.")
+    live = resolve_store_root()
+    if live is not None and _overlap(workspace, live):
+        _refuse("the workspace may not contain the live store or lie inside it.")
+    if not args.test:
+        if live is None:
+            _refuse("LIMNER_STORE_DIR is not set; it must name the store folder.")
+        return workspace, live
+    test_dir = resolve_test_dir(resolve_output_dir(args.output_dir))
+    _require_plain_folder(test_dir, "The test folder")
+    _require_plain_folder(test_dir / "store", "The test store")
+    store_root = (test_dir / "store").resolve()
+    if live is not None:
+        if not live.is_dir():
+            _refuse("LIMNER_STORE_DIR must name an existing folder.")
+        if _overlap(store_root, live):
+            _refuse("the test store and the live store may not overlap.")
+    if _overlap(workspace, store_root):
+        _refuse(f"the test store {store_root} overlaps the workspace; pass --output-dir outside the workspace.")
+    return workspace, store_root
+
+
+def run_store_mode(args) -> None:
+    workspace, store_root = resolve_store_mode_roots(args)
+    try:
+        store = open_store(store_root, must_exist=not args.test)
+    except StoreError as e:
+        _refuse(e)
+    raw = sys.stdin.buffer.read(MAX_ORDER_BYTES + 1)
+    try:
+        order = parse_order(raw, workspace, store)
+    except OrderError as e:
+        _refuse(e)
+    if args.test:
+        generate = None
+        print("Test run: no provider was called and nothing was charged.")
+    else:
+        get_api_key(order.provider)
+        generate = resolve_provider(order.provider)
+    try:
+        written, error = run_job(store, order, "test" if args.test else "live", generate), None
+    except JobError as e:
+        written, error = e.written, e
+    print(f"Store: {store.location}")
+    for label, key in written:
+        print(f"{label}: {key}")
+    if error:
+        _refuse(error)
+
+
 def main():
     args = parse_args()
+    if args.order:
+        run_store_mode(args)
+        return
     output_dir = resolve_output_dir(args.output_dir)
     provider_name, images, prompt, prompt_file = resolve_config(args)
     validate_provider(provider_name)

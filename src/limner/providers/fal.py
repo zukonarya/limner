@@ -1,27 +1,14 @@
-import math
 import urllib.request
 from pathlib import Path
 
 import fal_client
 
+from limner.core.aspect import IMAGE_SIZES, reduce_ratio
+
 from .result import ProviderError, ProviderResult, provider_response
 
 
 ENDPOINT = "fal-ai/flux-2-pro/edit"
-
-IMAGE_SIZES = {
-    "1:1": "square_hd",
-    "4:3": "landscape_4_3",
-    "3:4": "portrait_4_3",
-    "16:9": "landscape_16_9",
-    "9:16": "portrait_16_9",
-}
-
-
-def reduce_ratio(ratio: str) -> str:
-    w, h = (int(n) for n in ratio.split(":"))
-    d = math.gcd(w, h)
-    return f"{w // d}:{h // d}"
 
 
 def generate(prompt: str, images: list[Path], aspect_ratio: str | None = None) -> ProviderResult:

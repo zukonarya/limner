@@ -1,18 +1,22 @@
 #!/usr/bin/env python3
-import re
 import sys
 import time
 from pathlib import Path
 
 from dotenv import load_dotenv
 
-from limner.core.config import resolve_output_dir
+from limner.core.aspect import AspectError, check_aspect_ratio
+from limner.core.config import resolve_output_dir, resolve_store_root, resolve_test_dir
+from limner.core.job import JobError, run_job
 from limner.core.metadata import parse_header
+from limner.core.order import MAX_ORDER_BYTES, OrderError, parse_order
+from limner.core.placeholder import render_placeholder
 from limner.core.receipt import build_receipt, new_job_id, redact_error, utc_now, write_receipt
+from limner.core.store import StoreError, open_store
 from limner.core.writeonce import WriteOnceError, write_once
 from limner.providers import resolve_provider
 from limner.providers.result import ProviderError
-from limner.core.validation import get_api_key, validate_images
+from limner.core.validation import get_api_key, validate_images, validate_provider
 
 load_dotenv()
 
@@ -53,6 +57,22 @@ def parse_args():
         ),
     )
     parser.add_argument(
+        "--test",
+        action="store_true",
+        help="Test run: write a placeholder image and a receipt to <output dir>/test; no provider is called and nothing is charged",
+    )
+    parser.add_argument(
+        "--order",
+        action="store_true",
+        help="Store mode: read one order form as JSON from standard input and file the job in the store",
+    )
+    parser.add_argument(
+        "--workspace",
+        type=Path,
+        metavar="DIR",
+        help="Store mode: the caller's workspace (default: the current folder)",
+    )
+    parser.add_argument(
         "prompt",
         nargs="?",
         help="Inline prompt text (mutually exclusive with --file)",
@@ -71,6 +91,14 @@ def parse_args():
 
     args = parser.parse_args()
 
+    if args.order:
+        if args.file or args.prompt or args.provider or args.images or args.aspect_ratio:
+            # Store mode's contract is exit 1 with an Error: line, not argparse's exit 2.
+            _refuse("--order takes the prompt, provider, references and settings from the order form; "
+                    "--file, an inline prompt, --provider, --image and -a can't be used with it.")
+        return args
+    if args.workspace:
+        parser.error("--workspace is only used with --order.")
     if args.file and args.prompt:
         parser.error("--file and inline prompt are mutually exclusive.")
     if not args.file and not args.prompt:
@@ -112,48 +140,154 @@ def resolve_aspect_ratio(args, provider):
         ratio = header.get("aspect_ratio")
     if ratio is None:
         return None
-    ratio = ratio.strip()
-    match = re.fullmatch(r"([0-9]+):([0-9]+)", ratio)
-    if not match or not all(int(n) > 0 for n in match.groups()):
-        print(f"Error: aspect ratio '{ratio}' must be two positive integers separated by a colon, e.g. 16:9.")
+    try:
+        return check_aspect_ratio(ratio, provider)
+    except AspectError as e:
+        print(f"Error: {e}")
         sys.exit(1)
-    if provider == "fal":
-        from limner.providers.fal import IMAGE_SIZES, reduce_ratio
 
-        ratio = reduce_ratio(ratio)
-        if ratio not in IMAGE_SIZES:
-            print(f"Error: fal supports only these aspect ratios: {', '.join(IMAGE_SIZES)}.")
-            sys.exit(1)
-    elif provider != "gemini":
-        print(f"Error: aspect ratio is only supported by the gemini and fal providers, not '{provider}'.")
+
+def build_output_path(folder: Path, stem: str | None, provider: str, timestamp: str) -> Path:
+    prefix = f"{stem}_" if stem else ""
+    return folder / f"{prefix}{provider}_{timestamp}.png"
+
+
+def prepare_test_dir(test_dir: Path) -> None:
+    # A link here could steer test files into a client folder, so only a real folder is accepted.
+    if test_dir.is_symlink() or (test_dir.exists() and not test_dir.is_dir()):
+        print(f"Error: the test folder {test_dir} must be a plain folder, not a link or a file.")
         sys.exit(1)
-    return ratio
+    test_dir.mkdir(parents=True, exist_ok=True)
 
 
-def build_output_path(
-    prompt_file: Path | None, provider: str, timestamp: str, output_dir: Path
-) -> Path:
-    if prompt_file is not None:
-        return prompt_file.parent / f"{prompt_file.stem}_{provider}_{timestamp}.png"
-    output_dir.mkdir(parents=True, exist_ok=True)
-    return output_dir / f"{provider}_{timestamp}.png"
+def refuse_live_write_into_test_dir(write_dir: Path, test_dir: Path) -> None:
+    write_dir, test_dir = write_dir.resolve(), test_dir.resolve()
+    if write_dir == test_dir or write_dir.is_relative_to(test_dir):
+        print(f"Error: a live run may not write into the test folder {test_dir}.")
+        sys.exit(1)
+
+
+def run_test_mode(output_path: Path, receipt_fields: dict, provider: str, aspect_ratio: str | None) -> None:
+    start = time.time()
+    image = render_placeholder(provider, aspect_ratio)
+    elapsed = time.time() - start
+    try:
+        write_once(output_path, image)
+        write_receipt(output_path.with_suffix(".run.json"), build_receipt(
+            **receipt_fields,
+            mode="test",
+            status="succeeded",
+            finished_at=utc_now(),
+            duration_s=elapsed,
+            image=output_path.name,
+        ))
+    except WriteOnceError as e:
+        print(f"Error: {e}")
+        sys.exit(1)
+    print("Test run: no provider was called and nothing was charged.")
+    print(f"Saved: {output_path}")
+    print(f"Receipt: {output_path.with_suffix('.run.json')}")
+
+
+def _refuse(message) -> None:
+    # One line, printable only: the agent reads labelled lines, so error text must not be able to forge one.
+    text = "".join(c if c.isprintable() else " " for c in str(message))
+    print(f"Error: {text}")
+    sys.exit(1)
+
+
+def _require_plain_folder(path: Path, what: str) -> None:
+    if path.is_symlink() or (path.exists() and not path.is_dir()):
+        _refuse(f"{what} {path} must be a plain folder, not a link or a file.")
+
+
+def _overlap(a: Path, b: Path) -> bool:
+    return a == b or a.is_relative_to(b) or b.is_relative_to(a)
+
+
+def resolve_store_mode_roots(args) -> tuple[Path, Path]:
+    """The caller workspace and the store root, checked against each other without creating anything."""
+    workspace = (args.workspace or Path.cwd()).expanduser().resolve()
+    if workspace == Path(workspace.anchor) or workspace == Path.home().resolve():
+        _refuse("the workspace may not be the root folder or the home folder.")
+    if not workspace.is_dir():
+        _refuse("the workspace must be an existing folder.")
+    live = resolve_store_root()
+    if live is not None and _overlap(workspace, live):
+        _refuse("the workspace may not contain the live store or lie inside it.")
+    if not args.test:
+        if live is None:
+            _refuse("LIMNER_STORE_DIR is not set; it must name the store folder.")
+        return workspace, live
+    test_dir = resolve_test_dir(resolve_output_dir(args.output_dir))
+    _require_plain_folder(test_dir, "The test folder")
+    _require_plain_folder(test_dir / "store", "The test store")
+    store_root = (test_dir / "store").resolve()
+    if live is not None:
+        if not live.is_dir():
+            _refuse("LIMNER_STORE_DIR must name an existing folder.")
+        if _overlap(store_root, live):
+            _refuse("the test store and the live store may not overlap.")
+    if _overlap(workspace, store_root):
+        _refuse(f"the test store {store_root} overlaps the workspace; pass --output-dir outside the workspace.")
+    return workspace, store_root
+
+
+def run_store_mode(args) -> None:
+    workspace, store_root = resolve_store_mode_roots(args)
+    try:
+        store = open_store(store_root, must_exist=not args.test)
+    except StoreError as e:
+        _refuse(e)
+    raw = sys.stdin.buffer.read(MAX_ORDER_BYTES + 1)
+    try:
+        order = parse_order(raw, workspace, store)
+    except OrderError as e:
+        _refuse(e)
+    if args.test:
+        generate = None
+        print("Test run: no provider was called and nothing was charged.")
+    else:
+        get_api_key(order.provider)
+        generate = resolve_provider(order.provider)
+    try:
+        written, error = run_job(store, order, "test" if args.test else "live", generate), None
+    except JobError as e:
+        written, error = e.written, e
+    print(f"Store: {store.location}")
+    for label, key in written:
+        print(f"{label}: {key}")
+    if error:
+        _refuse(error)
 
 
 def main():
     args = parse_args()
+    if args.order:
+        run_store_mode(args)
+        return
     output_dir = resolve_output_dir(args.output_dir)
     provider_name, images, prompt, prompt_file = resolve_config(args)
+    validate_provider(provider_name)
 
     aspect_ratio = resolve_aspect_ratio(args, provider_name)
 
     validate_images(images, provider_name)
-    get_api_key(provider_name)
 
-    generate_fn = resolve_provider(provider_name)
+    test_dir = resolve_test_dir(output_dir)
+    if args.test:
+        prepare_test_dir(test_dir)
+        folder = test_dir
+    else:
+        folder = prompt_file.parent if prompt_file else output_dir
+        refuse_live_write_into_test_dir(folder, test_dir)
+        get_api_key(provider_name)
+        generate_fn = resolve_provider(provider_name)
+        folder.mkdir(parents=True, exist_ok=True)
 
     started_at = utc_now()
     timestamp = started_at.astimezone().strftime("%Y-%m-%d_%H-%M-%S")
-    output_path = build_output_path(prompt_file, provider_name, timestamp, output_dir)
+    output_path = build_output_path(folder, prompt_file.stem if prompt_file else None, provider_name, timestamp)
     receipt_path = output_path.with_suffix(".run.json")
     for target in (output_path, receipt_path):
         if target.exists():
@@ -168,6 +302,10 @@ def main():
         prompt_file=prompt_file.name if prompt_file else None,
         references=images,
     )
+
+    if args.test:
+        run_test_mode(output_path, receipt_fields, provider_name, aspect_ratio)
+        return
 
     print(f"Generating with {provider_name}...")
     start = time.time()

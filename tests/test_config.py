@@ -92,3 +92,19 @@ def test_resolver_does_not_create_directory(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
     result = resolve_output_dir(None)
     assert not result.exists()
+
+
+def test_test_dir_is_test_under_output_dir_and_not_created(tmp_path):
+    from limner.core.config import resolve_test_dir
+
+    assert resolve_test_dir(tmp_path) == tmp_path / "test"
+    assert not (tmp_path / "test").exists()
+
+
+def test_test_dir_keeps_a_linked_last_part_unresolved(tmp_path):
+    from limner.core.config import resolve_test_dir
+
+    elsewhere = tmp_path / "elsewhere"
+    elsewhere.mkdir()
+    (tmp_path / "test").symlink_to(elsewhere)
+    assert resolve_test_dir(tmp_path).is_symlink()

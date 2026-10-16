@@ -90,6 +90,8 @@ def test_provider_error_prints_the_written_keys_and_exits_1(ws, live, monkeypatc
     lines = _lines(out)
     assert {"Store", "Order", "Receipt", "Error"} <= set(lines) and "Image" not in lines
     assert "RuntimeError: down" in out
+    labels = _labels(out)
+    assert not {"Copy", "Copies"} & set(labels) and labels[-2:] == ["Receipt", "Error"]
 
 
 @pytest.mark.parametrize("raw", [b"", b"not json", _order(provider="dalle"), _order(references=[])])
@@ -255,3 +257,15 @@ def test_a_test_order_makes_no_copies_and_says_so(ws, live, tmp_path, monkeypatc
     assert labels[labels.index("Image") + 1:] == ["Copies", "Receipt"]
     assert "Copies: none in test mode" in out.splitlines()
     assert list((ws / "out").iterdir()) == []
+
+
+def test_a_raising_copy_function_is_reported_and_the_job_succeeds(ws, live, monkeypatch, capsys):
+    monkeypatch.setenv("FAL_KEY", "set")
+    monkeypatch.setattr("limner.generate_logo.bind_copies",
+                        lambda folder: MagicMock(side_effect=RuntimeError("upload failed")))
+    assert _run(["--workspace", str(ws)], _order(), monkeypatch, MagicMock(return_value=ProviderResult(image=b"img"))) == 0
+    out = capsys.readouterr().out
+    image = _lines(out)["Image"].rsplit("/", 1)[1]
+    assert [line for line in out.splitlines() if line.startswith("Copy")] == [
+        "Copy: failed (RuntimeError) v01.txt", f"Copy: failed (RuntimeError) {image}"]
+    assert "Error" not in _labels(out)

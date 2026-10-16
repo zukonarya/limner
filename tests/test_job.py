@@ -239,6 +239,9 @@ def test_a_different_file_at_the_name_is_kept_and_the_job_succeeds(ws, store):
     (MagicMock(return_value=[{"path": "x", "result": "written", "detail": None}]), "invalid records"),
     (MagicMock(return_value=[{"path": "x", "result": "done", "detail": None}] * 2), "invalid records"),
     (MagicMock(return_value=[{"path": "x", "result": "written"}] * 2), "invalid records"),
+    (MagicMock(return_value=[{"path": "\ud800", "result": "written", "detail": None}] * 2), "invalid records"),
+    (MagicMock(return_value=[{"path": "x" * 5000, "result": "written", "detail": None}] * 2), "invalid records"),
+    (MagicMock(return_value=[{"path": "x", "result": "failed", "detail": "E" * 100}] * 2), "invalid records"),
 ])
 def test_a_broken_copy_function_never_fails_the_job(copy, detail, ws, store):
     result = run_job(store, _order(ws, store), "live", _live(), copy=copy)

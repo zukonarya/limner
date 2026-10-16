@@ -74,10 +74,26 @@ def _call_provider(order, generate):
             raise _Failed(original, called) from e
 
 
+# Bounds on what a copy function may hand back: the path goes into the receipt, the detail onto one output line.
+MAX_COPY_PATH = 4096
+MAX_COPY_DETAIL = 64
+
+
+def _text(value, limit: int) -> bool:
+    if not isinstance(value, str) or len(value) > limit:
+        return False
+    try:
+        # The receipt is UTF-8; a lone surrogate would only fail when the receipt is written.
+        value.encode("utf-8")
+    except UnicodeEncodeError:
+        return False
+    return True
+
+
 def _well_formed(records, count: int) -> bool:
     return isinstance(records, list) and len(records) == count and all(
-        isinstance(r, dict) and set(r) == {"path", "result", "detail"} and isinstance(r["path"], str)
-        and r["result"] in RESULTS and (r["detail"] is None or isinstance(r["detail"], str))
+        isinstance(r, dict) and set(r) == {"path", "result", "detail"} and _text(r["path"], MAX_COPY_PATH)
+        and r["result"] in RESULTS and (r["detail"] is None or _text(r["detail"], MAX_COPY_DETAIL))
         for r in records
     )
 

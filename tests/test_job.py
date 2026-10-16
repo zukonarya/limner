@@ -6,6 +6,7 @@ from unittest.mock import MagicMock
 import pytest
 
 from limner.core import job as job_module
+from limner.core.copies import bind_copies
 from limner.core.job import JobError, run_job
 from limner.core.order import parse_order
 from limner.core.store import StoreError, open_store
@@ -51,7 +52,7 @@ SESSION = "demo-site/sessions/01-nav"
 
 
 def test_test_job_writes_every_original_under_the_adr_names(ws, store):
-    written = run_job(store, _order(ws, store), "test", None)
+    written = run_job(store, _order(ws, store), "test", None).written
     assert written == [
         ("Prompt", f"{SESSION}/v01.txt"),
         ("Reference", "demo-site/references/ref.png"),
@@ -90,7 +91,7 @@ def test_order_form_holds_resolved_paths_cli_fields_and_version(ws, store):
 def test_numbering_continues_across_phases_and_after_legacy_versions(ws, store):
     store.create("demo-site/sessions/00-legacy/v17.txt", b"old")
     run_job(store, _order(ws, store), "test", None)
-    written = run_job(store, _order(ws, store, phase="02-hero"), "test", None)
+    written = run_job(store, _order(ws, store, phase="02-hero"), "test", None).written
     assert store.exists("demo-site/sessions/01-nav/v18.txt")
     assert written[0] == ("Prompt", "demo-site/sessions/02-hero/v19.txt")
 
@@ -98,7 +99,7 @@ def test_numbering_continues_across_phases_and_after_legacy_versions(ws, store):
 def test_existing_version_with_the_same_prompt_adds_a_job(ws, store, monkeypatch):
     run_job(store, _order(ws, store), "test", None)
     monkeypatch.setattr(job_module, "new_job_id", lambda now: "20261013T120001Z-beef")
-    written = run_job(store, _order(ws, store, version=1), "test", None)
+    written = run_job(store, _order(ws, store, version=1), "test", None).written
     assert [label for label, _ in written] == ["Order", "Image", "Receipt"]
     assert store.list("demo-site/.versions/") == ["demo-site/.versions/v01"]
 
@@ -174,7 +175,7 @@ def test_live_job_sends_temporary_copies_and_removes_them(ws, store):
 
 def test_a_reused_reference_is_not_reported_as_written(ws, store):
     store.create("demo-site/references/ref.png", b"png-bytes")
-    written = run_job(store, _order(ws, store), "test", None)
+    written = run_job(store, _order(ws, store), "test", None).written
     assert "Reference" not in [label for label, _ in written]
 
 
@@ -195,3 +196,86 @@ def test_an_unexpected_error_after_the_prompt_still_ends_with_a_failed_receipt(w
     assert [label for label, _ in exc.value.written] == ["Prompt", "Reference", "Order", "Receipt"]
     receipt = _json(store, exc.value.written[-1][1])
     assert (receipt["status"], receipt["error"]["type"]) == ("failed", "OSError")
+
+
+IMAGE_NAME = f"v01_fal_{JOB_ID}.png"
+
+
+def _live(image=b"image-bytes"):
+    return MagicMock(return_value=ProviderResult(image=image, endpoint="fal-ai/edit"))
+
+
+def _receipt(store):
+    return _json(store, f"{SESSION}/v01_fal_{JOB_ID}.run.json")
+
+
+def test_a_live_job_copies_the_prompt_and_image_and_records_them(ws, store):
+    result = run_job(store, _order(ws, store), "live", _live(), copy=bind_copies(ws / "out"))
+    out = ws / "out"
+    assert (out / "v01.txt").read_bytes() == b"A blue square" and (out / IMAGE_NAME).read_bytes() == b"image-bytes"
+    assert [(r["result"], r["detail"]) for r in result.copies] == [("written", None), ("written", None)]
+    assert _receipt(store)["caller_copies"] == [
+        {"path": str(out / "v01.txt"), "result": "written"}, {"path": str(out / IMAGE_NAME), "result": "written"}]
+    assert result.written[-1][0] == "Receipt"
+
+
+def test_a_second_job_in_the_version_finds_the_prompt_identical(ws, store, monkeypatch):
+    run_job(store, _order(ws, store), "live", _live(), copy=bind_copies(ws / "out"))
+    monkeypatch.setattr(job_module, "new_job_id", lambda now: "20261013T120001Z-beef")
+    result = run_job(store, _order(ws, store, version=1), "live", _live(b"other"), copy=bind_copies(ws / "out"))
+    assert [r["result"] for r in result.copies] == ["identical", "written"]
+
+
+def test_a_different_file_at_the_name_is_kept_and_the_job_succeeds(ws, store):
+    (ws / "out" / "v01.txt").write_bytes(b"my own draft")
+    result = run_job(store, _order(ws, store), "live", _live(), copy=bind_copies(ws / "out"))
+    assert [r["result"] for r in result.copies] == ["skipped: exists", "written"]
+    assert (ws / "out" / "v01.txt").read_bytes() == b"my own draft"
+    assert _receipt(store)["status"] == "succeeded"
+
+
+@pytest.mark.parametrize("copy, detail", [
+    (MagicMock(side_effect=RuntimeError("upload failed /secret")), "RuntimeError"),
+    (MagicMock(return_value=[{"path": "x", "result": "written", "detail": None}]), "invalid records"),
+    (MagicMock(return_value=[{"path": "x", "result": "done", "detail": None}] * 2), "invalid records"),
+    (MagicMock(return_value=[{"path": "x", "result": "written"}] * 2), "invalid records"),
+    (MagicMock(return_value=[{"path": "\ud800", "result": "written", "detail": None}] * 2), "invalid records"),
+    (MagicMock(return_value=[{"path": "x" * 5000, "result": "written", "detail": None}] * 2), "invalid records"),
+    (MagicMock(return_value=[{"path": "x", "result": "failed", "detail": "E" * 100}] * 2), "invalid records"),
+])
+def test_a_broken_copy_function_never_fails_the_job(copy, detail, ws, store):
+    result = run_job(store, _order(ws, store), "live", _live(), copy=copy)
+    assert result.copies == [{"path": "v01.txt", "result": "failed", "detail": detail},
+                             {"path": IMAGE_NAME, "result": "failed", "detail": detail}]
+    receipt = _receipt(store)
+    assert (receipt["status"], receipt["image"]) == ("succeeded", IMAGE_NAME)
+    assert receipt["caller_copies"] == [{"path": "v01.txt", "result": "failed"},
+                                        {"path": IMAGE_NAME, "result": "failed"}]
+
+
+def test_a_failed_provider_call_makes_no_copies(ws, store):
+    copy = MagicMock()
+    with pytest.raises(JobError) as exc:
+        run_job(store, _order(ws, store), "live", MagicMock(side_effect=RuntimeError("down")), copy=copy)
+    copy.assert_not_called()
+    assert exc.value.copies == [] and _json(store, exc.value.written[-1][1])["caller_copies"] == []
+
+
+def test_a_receipt_write_failure_after_the_copies_still_reports_them(ws, store, monkeypatch):
+    real_create = store.create
+
+    def no_receipt(key, data):
+        if key.endswith(".run.json"):
+            raise StoreError("disk full")
+        return real_create(key, data)
+    monkeypatch.setattr(store, "create", no_receipt)
+    with pytest.raises(JobError) as exc:
+        run_job(store, _order(ws, store), "live", _live(), copy=bind_copies(ws / "out"))
+    assert [r["result"] for r in exc.value.copies] == ["written", "written"]
+    assert (ws / "out" / "v01.txt").exists()
+
+
+def test_without_a_copy_function_nothing_is_copied(ws, store):
+    result = run_job(store, _order(ws, store), "test", None)
+    assert result.copies == [] and _receipt(store)["caller_copies"] == []
+    assert list((ws / "out").iterdir()) == []

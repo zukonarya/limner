@@ -14,6 +14,7 @@ from limner.core.writeonce import _current_umask
 from limner.providers import VALID_PROVIDERS
 
 WRITTEN, IDENTICAL, SKIPPED, FAILED = "written", "identical", "skipped: exists", "failed"
+RESULTS = (WRITTEN, IDENTICAL, SKIPPED, FAILED)
 
 _VERSION = r"v[0-9]{2,}"
 _NAME = re.compile(

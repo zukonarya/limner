@@ -179,3 +179,20 @@ def test_names_outside_the_adr_patterns_are_refused_untouched(name, out, monkeyp
 def test_three_digit_versions_are_valid_names(out):
     assert _results(_run(out, [("v100.txt", b"p"), ("v100_gemini_20261015T101500Z-0f0f.png", b"i")])) == [
         ("written", None), ("written", None)]
+
+
+def test_a_socket_at_the_name_is_skipped(out):
+    import socket
+    # AF_UNIX paths are short; bind from inside the folder with a relative name.
+    sock, cwd = socket.socket(socket.AF_UNIX), os.getcwd()
+    os.chdir(out)
+    try:
+        sock.bind(PROMPT)
+        assert _results(_run(out, [(PROMPT, b"prompt")])) == [("skipped: exists", None)]
+    finally:
+        os.chdir(cwd)
+        sock.close()
+
+
+def test_an_unusable_return_dir_fails_every_file_instead_of_raising(tmp_path):
+    assert _results(bind_copies(str(tmp_path) + "\x00x")([(PROMPT, b"p")])) == [("failed", "ValueError")]

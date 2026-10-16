@@ -22,8 +22,9 @@ _NAME = re.compile(
 # O_NOFOLLOW_ANY refuses a link at any component of return_dir; elsewhere only the last one is checked.
 _DIR_FLAGS = os.O_RDONLY | os.O_DIRECTORY | getattr(os, "O_NOFOLLOW_ANY", os.O_NOFOLLOW)
 _READ_FLAGS = os.O_RDONLY | os.O_NONBLOCK | os.O_NOFOLLOW
-# What the open reports for a link, a folder or a pipe with no reader: something other than a file is there.
-_NOT_A_FILE = {errno.ELOOP, errno.EISDIR, errno.ENXIO}
+# What the open reports for a link, a folder, a pipe with no reader or a socket: something other than a file
+# is there.
+_NOT_A_FILE = {errno.ELOOP, errno.EISDIR, errno.ENXIO, errno.EOPNOTSUPP}
 
 
 def _token(error: BaseException) -> str:
@@ -98,7 +99,7 @@ def copy_files(return_dir: Path, files: list[tuple[str, bytes]]) -> list[dict]:
     if any(outcome is None for outcome in outcomes):
         try:
             folder = os.open(return_dir, _DIR_FLAGS)
-        except OSError as e:
+        except (OSError, ValueError) as e:
             outcomes = [outcome or (FAILED, _token(e)) for outcome in outcomes]
         else:
             try:

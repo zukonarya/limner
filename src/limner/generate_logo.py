@@ -6,6 +6,7 @@ from pathlib import Path
 from dotenv import load_dotenv
 
 from limner.core.aspect import AspectError, check_aspect_ratio
+from limner.core.copies import FAILED, bind_copies
 from limner.core.config import resolve_output_dir, resolve_store_root, resolve_test_dir
 from limner.core.job import JobError, run_job
 from limner.core.metadata import parse_header
@@ -189,11 +190,20 @@ def run_test_mode(output_path: Path, receipt_fields: dict, provider: str, aspect
     print(f"Receipt: {output_path.with_suffix('.run.json')}")
 
 
+def _printable(text) -> str:
+    # One line, printable only: the agent reads labelled lines, so no text may forge one.
+    return "".join(c if c.isprintable() else " " for c in str(text))
+
+
 def _refuse(message) -> None:
-    # One line, printable only: the agent reads labelled lines, so error text must not be able to forge one.
-    text = "".join(c if c.isprintable() else " " for c in str(message))
-    print(f"Error: {text}")
+    print(f"Error: {_printable(message)}")
     sys.exit(1)
+
+
+def _copy_line(record: dict) -> str:
+    result = f"{FAILED} ({record['detail']})" if record["result"] == FAILED else record["result"]
+    # The path goes last, so brackets or result words inside it can't change how the line reads.
+    return _printable(f"Copy: {result} {record['path']}")
 
 
 def _require_plain_folder(path: Path, what: str) -> None:
@@ -245,18 +255,28 @@ def run_store_mode(args) -> None:
     except OrderError as e:
         _refuse(e)
     if args.test:
-        generate = None
+        generate = copy = None
         print("Test run: no provider was called and nothing was charged.")
     else:
         get_api_key(order.provider)
         generate = resolve_provider(order.provider)
+        copy = bind_copies(order.return_dir)
     try:
-        written, error = run_job(store, order, "test" if args.test else "live", generate), None
+        result = run_job(store, order, "test" if args.test else "live", generate, copy=copy)
+        written, copies, error = result.written, result.copies, None
     except JobError as e:
-        written, error = e.written, e
+        written, copies, error = e.written, e.copies, e
     print(f"Store: {store.location}")
     for label, key in written:
-        print(f"{label}: {key}")
+        if label != "Receipt":
+            print(f"{label}: {key}")
+    for record in copies:
+        print(_copy_line(record))
+    if copy is None and any(label == "Image" for label, _ in written):
+        print("Copies: none in test mode")
+    for label, key in written:
+        if label == "Receipt":
+            print(f"{label}: {key}")
     if error:
         _refuse(error)
 

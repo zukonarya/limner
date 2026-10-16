@@ -5,10 +5,12 @@ Everything goes through the store and the catalogue, so a cloud worker can call 
 import json
 import tempfile
 import time
+from dataclasses import dataclass, field
 from pathlib import Path
 
 from limner.core import catalog
 from limner.core.catalog import CatalogError
+from limner.core.copies import FAILED, RESULTS
 from limner.core.placeholder import render_placeholder
 from limner.core.receipt import build_receipt, new_job_id, redact_error, serialise_receipt, utc_now
 from limner.core.store import KeyExists, StoreError
@@ -16,11 +18,19 @@ from limner.providers.result import ProviderError
 
 
 class JobError(Exception):
-    """A job that ended early; written lists (label, key) for every file already in the store."""
+    """A job that ended early; written lists (label, key) for every file already in the store, copies the
+    caller copies made before the failure."""
 
-    def __init__(self, message: str, written: list[tuple[str, str]]):
+    def __init__(self, message: str, written: list[tuple[str, str]], copies: list[dict] | None = None):
         super().__init__(message)
         self.written = written
+        self.copies = copies or []
+
+
+@dataclass(frozen=True)
+class JobResult:
+    written: list[tuple[str, str]]
+    copies: list[dict] = field(default_factory=list)
 
 
 class _Failed(Exception):
@@ -64,6 +74,26 @@ def _call_provider(order, generate):
             raise _Failed(original, called) from e
 
 
+def _well_formed(records, count: int) -> bool:
+    return isinstance(records, list) and len(records) == count and all(
+        isinstance(r, dict) and set(r) == {"path", "result", "detail"} and isinstance(r["path"], str)
+        and r["result"] in RESULTS and (r["detail"] is None or isinstance(r["detail"], str))
+        for r in records
+    )
+
+
+def _deliver(copy, files: list[tuple[str, bytes]]) -> list[dict]:
+    # The original is already stored, so nothing the copy step does may fail the job.
+    try:
+        records = copy(files)
+        if _well_formed(records, len(files)):
+            return records
+        detail = "invalid records"
+    except Exception as e:
+        detail = type(e).__name__
+    return [{"path": name, "result": FAILED, "detail": detail} for name, _ in files]
+
+
 def _claim(store, order, prompt: bytes, written: list) -> int:
     project, phase = order.project, order.phase
     if order.version is not None:
@@ -80,9 +110,10 @@ def _claim(store, order, prompt: bytes, written: list) -> int:
     return number
 
 
-def run_job(store, order, mode: str, generate) -> list[tuple[str, str]]:
+def run_job(store, order, mode: str, generate, copy=None) -> JobResult:
     """Runs steps 2-8 for a validated order; mode "test" renders the placeholder and never calls generate.
-    Returns (label, key) for every file written; raises JobError with the same list on failure."""
+    copy, when given, delivers vNN.txt and the image to the caller (step 7).
+    Returns (label, key) for every file written and the copy records; raises JobError on failure."""
     now = utc_now()
     job_id, received_at = new_job_id(now), now.isoformat()
     project, phase, provider = order.project, order.phase, order.provider
@@ -131,17 +162,22 @@ def run_job(store, order, mode: str, generate) -> list[tuple[str, str]]:
     except _Failed as failure:
         _fail_with_receipt(store, receipt, receipt_fields, failure, time.time() - start, written)
 
+    copies = []
+    if copy is not None:
+        copies = _deliver(copy, [(f"{catalog.version_name(number)}.txt", order.prompt.encode("utf-8")),
+                                 (image.rsplit("/", 1)[1], image_bytes)])
     called = dict(endpoint=result.endpoint, model=result.model, settings_sent=result.settings_sent,
                   provider_response=result.provider_response) if result else {}
     try:
         store.create(receipt, serialise_receipt(build_receipt(
             **receipt_fields, **called, status="succeeded", finished_at=utc_now(),
             duration_s=time.time() - start, image=image.rsplit("/", 1)[1],
+            caller_copies=[{"path": r["path"], "result": r["result"]} for r in copies],
         )))
     except StoreError as e:
-        raise JobError(f"The image is stored, but the receipt could not be written: {e}", written) from None
+        raise JobError(f"The image is stored, but the receipt could not be written: {e}", written, copies) from None
     written.append(("Receipt", receipt))
-    return written
+    return JobResult(written, copies)
 
 
 def _fail_with_receipt(store, key, receipt_fields, failure: _Failed, elapsed: float, written: list) -> None:

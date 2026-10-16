@@ -181,3 +181,77 @@ def test_error_text_can_not_forge_an_output_line(ws, live, monkeypatch, capsys):
     assert _run(["--workspace", str(ws)], _order(), monkeypatch, generate) == 1
     out = capsys.readouterr().out
     assert "Image" not in _lines(out) and "\x1b" not in out
+
+
+def _labels(out):
+    return [line.split(":", 1)[0] for line in out.splitlines()]
+
+
+def test_live_order_prints_the_copies_between_image_and_receipt(ws, live, monkeypatch, capsys):
+    monkeypatch.setenv("FAL_KEY", "set")
+    (ws / "out" / "v01.txt").write_bytes(b"my own draft")
+    assert _run(["--workspace", str(ws)], _order(), monkeypatch, MagicMock(return_value=ProviderResult(image=b"img"))) == 0
+    out = capsys.readouterr().out
+    assert _labels(out) == ["Store", "Prompt", "Reference", "Order", "Image", "Copy", "Copy", "Receipt"]
+    copy_lines = [line for line in out.splitlines() if line.startswith("Copy:")]
+    assert copy_lines[0] == f"Copy: skipped: exists {ws / 'out' / 'v01.txt'}"
+    image = _lines(out)["Image"].rsplit("/", 1)[1]
+    assert copy_lines[1] == f"Copy: written {ws / 'out' / image}"
+    receipt = json.loads((live / _lines(out)["Receipt"]).read_text())
+    assert [c["result"] for c in receipt["caller_copies"]] == ["skipped: exists", "written"]
+
+
+def test_a_failed_copy_is_reported_and_the_job_succeeds(ws, live, monkeypatch, capsys):
+    import errno
+    import os
+    from limner.core import copies
+    monkeypatch.setenv("FAL_KEY", "set")
+    real_link = os.link
+
+    def full(src, dst, **kwargs):
+        # Only the caller copy of the prompt fails; store writes share the os module.
+        if dst == "v01.txt" and "dst_dir_fd" in kwargs:
+            raise OSError(errno.ENOSPC, f"No space left on device: {ws}")
+        return real_link(src, dst, **kwargs)
+    monkeypatch.setattr(copies.os, "link", full)
+    assert _run(["--workspace", str(ws)], _order(), monkeypatch, MagicMock(return_value=ProviderResult(image=b"img"))) == 0
+    out = capsys.readouterr().out
+    assert f"Copy: failed (ENOSPC) {ws / 'out' / 'v01.txt'}" in out.splitlines()
+    assert "Error" not in _labels(out)
+
+
+def test_a_receipt_failure_prints_the_copies_before_the_error(ws, live, monkeypatch, capsys):
+    from limner.core.store import FileStore, StoreError
+    monkeypatch.setenv("FAL_KEY", "set")
+    real_create = FileStore.create
+
+    def no_receipt(self, key, data):
+        if key.endswith(".run.json"):
+            raise StoreError("disk full")
+        return real_create(self, key, data)
+    monkeypatch.setattr(FileStore, "create", no_receipt)
+    assert _run(["--workspace", str(ws)], _order(), monkeypatch, MagicMock(return_value=ProviderResult(image=b"img"))) == 1
+    labels = _labels(capsys.readouterr().out)
+    assert labels[-3:] == ["Copy", "Copy", "Error"]
+
+
+def test_copy_lines_stay_one_line(ws, live, monkeypatch, capsys):
+    monkeypatch.setenv("FAL_KEY", "set")
+    (ws / "o\nut\x1b").mkdir()
+    fake = MagicMock(return_value=[{"path": "a", "result": "failed", "detail": "x\nImage: forged"}] * 2)
+    monkeypatch.setattr("limner.generate_logo.bind_copies", lambda folder: fake)
+    raw = _order(return_dir="o\nut\x1b")
+    assert _run(["--workspace", str(ws)], raw, monkeypatch, MagicMock(return_value=ProviderResult(image=b"img"))) == 0
+    out = capsys.readouterr().out
+    assert _labels(out).count("Image") == 1 and "\x1b" not in out
+    assert "Copy: failed (x Image: forged) a" in out.splitlines()
+
+
+def test_a_test_order_makes_no_copies_and_says_so(ws, live, tmp_path, monkeypatch, capsys):
+    out_dir = tmp_path / "out"
+    assert _run(["--test", "--workspace", str(ws), "--output-dir", str(out_dir)], _order(), monkeypatch) == 0
+    out = capsys.readouterr().out
+    labels = _labels(out)
+    assert labels[labels.index("Image") + 1:] == ["Copies", "Receipt"]
+    assert "Copies: none in test mode" in out.splitlines()
+    assert list((ws / "out").iterdir()) == []

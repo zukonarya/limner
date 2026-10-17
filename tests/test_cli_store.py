@@ -220,6 +220,10 @@ def test_a_failed_copy_is_reported_and_the_job_succeeds(ws, live, monkeypatch, c
     out = capsys.readouterr().out
     assert f"Copy: failed (ENOSPC) {ws / 'out' / 'v01.txt'}" in out.splitlines()
     assert "Error" not in _labels(out)
+    receipt = json.loads((live / _lines(out)["Receipt"]).read_text())
+    assert receipt["status"] == "succeeded"
+    assert [(c["path"], c["result"]) for c in receipt["caller_copies"]] == [
+        (str(ws / "out" / "v01.txt"), "failed"), (str(ws / "out" / _lines(out)["Image"].rsplit("/", 1)[1]), "written")]
 
 
 def test_a_receipt_failure_prints_the_copies_before_the_error(ws, live, monkeypatch, capsys):

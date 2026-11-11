@@ -486,6 +486,18 @@ def test_the_written_receipt_carries_the_returned_quality_and_size(tmp_path):
     assert (response["quality"], response["size"]) == ("high", "1024x1024")
 
 
+def test_a_failed_openai_text_call_leaves_quality_and_size_null_in_the_receipt(tmp_path, capsys):
+    from limner.providers.result import ProviderError
+    error = ProviderError(RuntimeError("rate limited"), endpoint="images.generate", model="gpt-image-2",
+                          settings_sent={"output_format": "png"})
+    with pytest.raises(SystemExit):
+        _run_plain(["--provider", "openai", "--output-dir", str(tmp_path), "p"], MagicMock(side_effect=error))
+    [receipt_path] = tmp_path.glob("*.run.json")
+    receipt = json.loads(receipt_path.read_text())
+    assert receipt["status"] == "failed" and receipt["endpoint"] == "images.generate"
+    assert receipt["provider_response"]["quality"] is None and receipt["provider_response"]["size"] is None
+
+
 def test_text_only_openai_prints_the_notice_once_right_after_generating(tmp_path, capsys):
     _run_plain(["--provider", "openai", "--output-dir", str(tmp_path), "p"], MagicMock(return_value=_openai_text_result()))
     out = capsys.readouterr().out

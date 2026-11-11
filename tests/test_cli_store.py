@@ -115,6 +115,18 @@ def test_text_only_fal_order_prints_the_notice_once_before_the_first_label(ws, l
     assert generate.call_args[0][1] == []
 
 
+def test_the_order_notice_comes_before_the_provider_is_called(ws, live, monkeypatch, capsys):
+    monkeypatch.setenv("FAL_KEY", "set")
+
+    def provider(prompt, images, **kwargs):
+        print("PROVIDER CALLED")
+        return ProviderResult(image=b"img")
+
+    assert _run(["--workspace", str(ws)], _order(references=[]), monkeypatch, provider) == 0
+    out = capsys.readouterr().out
+    assert out.index(TEXT_ONLY_NOTICE) < out.index("PROVIDER CALLED")
+
+
 def test_order_with_a_reference_prints_no_notice(ws, live, monkeypatch, capsys):
     monkeypatch.setenv("FAL_KEY", "set")
     assert _run(["--workspace", str(ws)], _order(), monkeypatch, MagicMock(return_value=ProviderResult(image=b"img"))) == 0

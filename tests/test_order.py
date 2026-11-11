@@ -177,6 +177,15 @@ def test_fal_may_run_without_references(ws, store):
     assert _parse(_order(provider="fal", references=[]), ws, store).references == ()
 
 
+def test_openai_may_run_without_references(ws, store):
+    assert _parse(_order(provider="openai", references=[]), ws, store).references == ()
+
+
+def test_openai_without_references_still_refuses_an_aspect_ratio(ws, store):
+    with pytest.raises(OrderError):
+        _parse(_order(provider="openai", references=[], settings={"aspect_ratio": "16:9"}), ws, store)
+
+
 def test_composite_still_needs_a_reference(ws, store):
     with pytest.raises(OrderError):
         _parse(_order(provider="composite", references=[]), ws, store)

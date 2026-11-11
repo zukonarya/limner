@@ -83,7 +83,8 @@ def build_receipt(
     version_name: str | None = None,
     caller_copies: list[dict] | None = None,
 ) -> dict:
-    response = {"request_id": None, "seed": None, "model_version": None, "usage": None}
+    response = {"request_id": None, "seed": None, "model_version": None, "usage": None,
+                "quality": None, "size": None}
     response.update(provider_response or {})
     return {
         "schema_version": SCHEMA_VERSION,

@@ -127,6 +127,23 @@ def test_the_order_notice_comes_before_the_provider_is_called(ws, live, monkeypa
     assert out.index(TEXT_ONLY_NOTICE) < out.index("PROVIDER CALLED")
 
 
+def test_text_only_openai_order_prints_the_notice_once_before_the_first_label(ws, live, monkeypatch, capsys):
+    monkeypatch.setenv("OPENAI_API_KEY", "set")
+    generate = MagicMock(return_value=ProviderResult(image=b"img", endpoint="images.generate"))
+    assert _run(["--workspace", str(ws)], _order(provider="openai", references=[]), monkeypatch, generate) == 0
+    out = capsys.readouterr().out
+    assert out.count(TEXT_ONLY_NOTICE) == 1
+    assert _labels(out)[:2] == [TEXT_ONLY_NOTICE, "Store"]
+    assert generate.call_args[0][1] == []
+
+
+def test_text_only_openai_order_with_an_aspect_ratio_is_refused_and_writes_nothing(ws, live, tmp_path, monkeypatch, capsys):
+    raw = _order(provider="openai", references=[], settings={"aspect_ratio": "16:9"})
+    assert _run(["--test", "--workspace", str(ws), "--output-dir", str(tmp_path / "out")], raw, monkeypatch) == 1
+    assert capsys.readouterr().out.startswith("Error: ")
+    assert _files(live) == []
+
+
 def test_order_with_a_reference_prints_no_notice(ws, live, monkeypatch, capsys):
     monkeypatch.setenv("FAL_KEY", "set")
     assert _run(["--workspace", str(ws)], _order(), monkeypatch, MagicMock(return_value=ProviderResult(image=b"img"))) == 0

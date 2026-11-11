@@ -8,10 +8,12 @@ from limner.core.aspect import IMAGE_SIZES, reduce_ratio
 from .result import ProviderError, ProviderResult, provider_response
 
 
-ENDPOINT = "fal-ai/flux-2-pro/edit"
+EDIT_ENDPOINT = "fal-ai/flux-2-pro/edit"
+TEXT_ENDPOINT = "fal-ai/flux-2-pro"
 
 
 def generate(prompt: str, images: list[Path], aspect_ratio: str | None = None) -> ProviderResult:
+    endpoint = EDIT_ENDPOINT if images else TEXT_ENDPOINT
     arguments = {
         "prompt": prompt,
         "output_format": "png",
@@ -22,11 +24,12 @@ def generate(prompt: str, images: list[Path], aspect_ratio: str | None = None) -
     request_ids = []
     settings_sent = {k: v for k, v in arguments.items() if k != "prompt"}
     try:
-        image_urls = [fal_client.upload_file(str(path)) for path in images]
+        if images:
+            arguments["image_urls"] = [fal_client.upload_file(str(path)) for path in images]
 
         result = fal_client.subscribe(
-            ENDPOINT,
-            arguments={**arguments, "image_urls": image_urls},
+            endpoint,
+            arguments=arguments,
             on_enqueue=request_ids.append,
         )
 
@@ -36,13 +39,13 @@ def generate(prompt: str, images: list[Path], aspect_ratio: str | None = None) -
     except Exception as e:
         raise ProviderError(
             e,
-            endpoint=ENDPOINT,
+            endpoint=endpoint,
             settings_sent=settings_sent,
             provider_response=provider_response(request_id=request_ids[0] if request_ids else None),
         ) from e
     return ProviderResult(
         image=image,
-        endpoint=ENDPOINT,
+        endpoint=endpoint,
         settings_sent=settings_sent,
         provider_response=provider_response(
             request_id=request_ids[0] if request_ids else None,

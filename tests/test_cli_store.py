@@ -6,6 +6,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
+from limner.core.validation import TEXT_ONLY_NOTICE
 from limner.generate_logo import main
 from limner.providers.result import ProviderResult
 
@@ -94,12 +95,50 @@ def test_provider_error_prints_the_written_keys_and_exits_1(ws, live, monkeypatc
     assert not {"Copy", "Copies"} & set(labels) and labels[-2:] == ["Receipt", "Error"]
 
 
-@pytest.mark.parametrize("raw", [b"", b"not json", _order(provider="dalle"), _order(references=[])])
+@pytest.mark.parametrize("raw", [b"", b"not json", _order(provider="dalle"), _order(provider="composite", references=[])])
 def test_validation_failures_write_nothing(raw, ws, live, tmp_path, monkeypatch, capsys):
     out = tmp_path / "out"
     assert _run(["--test", "--workspace", str(ws), "--output-dir", str(out)], raw, monkeypatch) == 1
     assert capsys.readouterr().out.startswith("Error: ")
     assert not out.exists() and _files(live) == []
+
+
+def test_text_only_fal_order_prints_the_notice_once_before_the_first_label(ws, live, monkeypatch, capsys):
+    monkeypatch.setenv("FAL_KEY", "set")
+    generate = MagicMock(return_value=ProviderResult(image=b"img", endpoint="fal-ai/flux-2-pro"))
+    assert _run(["--workspace", str(ws)], _order(references=[]), monkeypatch, generate) == 0
+    out = capsys.readouterr().out
+    labels = _labels(out)
+    assert out.count(TEXT_ONLY_NOTICE) == 1
+    assert labels[:2] == [TEXT_ONLY_NOTICE, "Store"]
+    assert labels[-1] == "Receipt" and "Image" in labels
+    assert generate.call_args[0][1] == []
+
+
+def test_order_with_a_reference_prints_no_notice(ws, live, monkeypatch, capsys):
+    monkeypatch.setenv("FAL_KEY", "set")
+    assert _run(["--workspace", str(ws)], _order(), monkeypatch, MagicMock(return_value=ProviderResult(image=b"img"))) == 0
+    assert TEXT_ONLY_NOTICE not in capsys.readouterr().out
+
+
+def test_gemini_order_without_references_prints_no_notice(ws, live, monkeypatch, capsys):
+    monkeypatch.setenv("GEMINI_API_KEY", "set")
+    assert _run(["--workspace", str(ws)], _order(provider="gemini", references=[]), monkeypatch,
+                MagicMock(return_value=ProviderResult(image=b"img"))) == 0
+    assert TEXT_ONLY_NOTICE not in capsys.readouterr().out
+
+
+def test_text_only_test_order_prints_no_notice(ws, live, tmp_path, monkeypatch, capsys):
+    out = tmp_path / "out"
+    assert _run(["--test", "--workspace", str(ws), "--output-dir", str(out)], _order(references=[]), monkeypatch) == 0
+    assert TEXT_ONLY_NOTICE not in capsys.readouterr().out
+
+
+def test_a_missing_key_prints_the_error_and_no_notice(ws, live, monkeypatch, capsys):
+    monkeypatch.delenv("FAL_KEY", raising=False)
+    assert _run(["--workspace", str(ws)], _order(references=[]), monkeypatch, MagicMock()) == 1
+    out = capsys.readouterr().out
+    assert out.startswith("Error: ") and TEXT_ONLY_NOTICE not in out
 
 
 @pytest.mark.parametrize("extra", [["--file", "p.txt"], ["--provider", "fal"], ["--image", "a.png"],

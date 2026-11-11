@@ -133,6 +133,7 @@ from datetime import datetime, timezone
 from unittest.mock import MagicMock, patch
 from limner.providers.result import ProviderResult
 from limner.generate_logo import resolve_aspect_ratio, parse_args, main
+from limner.core.validation import TEXT_ONLY_NOTICE
 
 
 def test_aspect_ratio_unset_by_default(tmp_path):
@@ -410,17 +411,64 @@ def test_unknown_header_provider_exits_cleanly_before_writing(tmp_path, capsys):
     assert sorted(p.name for p in tmp_path.iterdir()) == ["v01.txt"]
 
 
-def test_live_fal_without_reference_exits_before_key_check(tmp_path):
-    generate = MagicMock()
-    with patch.object(sys, "argv", ["limner-generate", "--provider", "fal", "--output-dir", str(tmp_path), "p"]), \
+def _run_plain(argv, generate):
+    with patch.object(sys, "argv", ["limner-generate", *argv]), \
          patch("limner.generate_logo.resolve_provider", return_value=generate), \
          patch("limner.generate_logo.get_api_key") as key:
-        with pytest.raises(SystemExit) as exc:
-            main()
+        main()
+    return key
+
+
+def _fal_text_result():
+    return ProviderResult(image=b"PNG", endpoint="fal-ai/flux-2-pro", settings_sent={"output_format": "png"})
+
+
+def test_live_fal_without_reference_runs_the_text_route(tmp_path):
+    generate = MagicMock(return_value=_fal_text_result())
+    key = _run_plain(["--provider", "fal", "--output-dir", str(tmp_path), "p"], generate)
+    key.assert_called_once_with("fal")
+    generate.assert_called_once()
+    assert generate.call_args[0][1] == []
+    [image] = tmp_path.glob("*.png")
+    receipt = json.loads(image.with_suffix(".run.json").read_text())
+    assert receipt["endpoint"] == "fal-ai/flux-2-pro"
+
+
+def test_text_only_fal_prints_the_notice_once_right_after_generating(tmp_path, capsys):
+    _run_plain(["--provider", "fal", "--output-dir", str(tmp_path), "p"], MagicMock(return_value=_fal_text_result()))
+    out = capsys.readouterr().out
+    lines = out.splitlines()
+    assert out.count(TEXT_ONLY_NOTICE) == 1
+    assert lines[lines.index("Generating with fal...") + 1] == TEXT_ONLY_NOTICE
+
+
+def test_notice_is_absent_when_a_reference_is_given(tmp_path, capsys):
+    generate = MagicMock(return_value=_fal_text_result())
+    _run_plain(["--provider", "fal", "--output-dir", str(tmp_path), "--image", str(_reference(tmp_path)), "p"], generate)
+    assert TEXT_ONLY_NOTICE not in capsys.readouterr().out
+
+
+def test_notice_is_absent_when_the_prompt_file_header_supplies_images(tmp_path, capsys):
+    ref = _reference(tmp_path)
+    f = tmp_path / "v01.txt"
+    f.write_text(f"# provider: fal\n# images: {ref.name}\n---\nA blue square\n")
+    _run_plain(["--file", str(f)], MagicMock(return_value=_fal_text_result()))
+    out = capsys.readouterr().out
+    assert "Generating with fal..." in out and TEXT_ONLY_NOTICE not in out
+
+
+def test_notice_is_absent_for_gemini_text_only(tmp_path, capsys):
+    _run_plain(["--provider", "gemini", "--output-dir", str(tmp_path), "p"], MagicMock(return_value=ProviderResult(image=b"PNG")))
+    assert TEXT_ONLY_NOTICE not in capsys.readouterr().out
+
+
+def test_openai_without_reference_is_still_refused_before_any_call(tmp_path, capsys):
+    generate = MagicMock()
+    with pytest.raises(SystemExit) as exc:
+        _run_plain(["--provider", "openai", "--output-dir", str(tmp_path), "p"], generate)
     assert exc.value.code == 1
-    key.assert_not_called()
     generate.assert_not_called()
-    assert list(tmp_path.iterdir()) == []
+    assert TEXT_ONLY_NOTICE not in capsys.readouterr().out
 
 
 # ── Test mode ───────────────────────────────────────────────────────────────
@@ -470,6 +518,17 @@ def test_test_mode_writes_placeholder_and_test_receipt(provider, tmp_path, monke
     assert receipt["prompt_sha256"] == sha256_text("A blue square")
     assert receipt["image"] == image.name
     assert Image.open(image).size == (1024, 1024)
+
+
+def test_test_mode_text_only_fal_writes_a_placeholder_and_prints_no_notice(tmp_path, monkeypatch, capsys):
+    _no_keys(monkeypatch)
+    out = tmp_path / "out"
+    _run_test_mode(["--provider", "fal", "--output-dir", str(out), "A blue square"])
+    [image] = (out / "test").glob("*.png")
+    receipt = json.loads(image.with_suffix(".run.json").read_text())
+    assert receipt["mode"] == "test" and receipt["provider"] == "fal"
+    assert receipt["endpoint"] is None and receipt["references"] == []
+    assert TEXT_ONLY_NOTICE not in capsys.readouterr().out
 
 
 def test_test_mode_with_file_leaves_prompt_folder_unchanged(tmp_path, monkeypatch):

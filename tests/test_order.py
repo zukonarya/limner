@@ -157,7 +157,6 @@ def test_valid_order_is_returned_with_held_bytes(ws, store):
         {"settings": {"aspect_ratio": 16}},
         {"settings": {"aspect_ratio": "2:1"}},
         {"provider": "dalle"},
-        {"references": []},
         {"settings": {"aspect_ratio": None}},
         {"settings": {"aspect_ratio": "9" * 5000 + ":1"}},
         {"references": [{"source": "x\u0000/ref.png", "label": "x"}]},
@@ -166,12 +165,21 @@ def test_valid_order_is_returned_with_held_bytes(ws, store):
         {"return_dir": "d" * 5000},
         {"references": [{"source": "ref.png", "label": "x"}] * 21},
     ],
-    ids=["seed", "number", "unsupported", "provider", "no refs", "null ratio", "huge ratio", "nul source",
+    ids=["seed", "number", "unsupported", "provider", "null ratio", "huge ratio", "nul source",
          "long source", "nul return", "long return", "too many refs"],
 )
 def test_invalid_settings_and_provider_are_refused(changes, ws, store):
     with pytest.raises(OrderError):
         _parse(_order(**changes), ws, store)
+
+
+def test_fal_may_run_without_references(ws, store):
+    assert _parse(_order(provider="fal", references=[]), ws, store).references == ()
+
+
+def test_composite_still_needs_a_reference(ws, store):
+    with pytest.raises(OrderError):
+        _parse(_order(provider="composite", references=[]), ws, store)
 
 
 def test_gemini_may_run_without_references(ws, store):

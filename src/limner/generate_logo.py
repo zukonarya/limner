@@ -17,7 +17,7 @@ from limner.core.store import StoreError, open_store
 from limner.core.writeonce import WriteOnceError, write_once
 from limner.providers import resolve_provider
 from limner.providers.result import ProviderError
-from limner.core.validation import get_api_key, validate_images, validate_provider
+from limner.core.validation import get_api_key, text_only_notice, validate_images, validate_provider
 
 load_dotenv()
 
@@ -261,6 +261,9 @@ def run_store_mode(args) -> None:
         get_api_key(order.provider)
         generate = resolve_provider(order.provider)
         copy = bind_copies(order.return_dir)
+        notice = text_only_notice(order.provider, order.references)
+        if notice:
+            print(notice)
     try:
         result = run_job(store, order, "test" if args.test else "live", generate, copy=copy)
         written, copies, error = result.written, result.copies, None
@@ -328,6 +331,9 @@ def main():
         return
 
     print(f"Generating with {provider_name}...")
+    notice = text_only_notice(provider_name, images)
+    if notice:
+        print(notice)
     start = time.time()
     extra = {"aspect_ratio": aspect_ratio} if aspect_ratio else {}
     try:

@@ -1,8 +1,9 @@
 import pytest
 from pathlib import Path
 from limner.core.validation import (
-    TEXT_ONLY_NOTICE, get_api_key, text_only_notice, validate_images, validate_provider,
+    TEXT_ONLY_NOTICE, get_api_key, missing_key_message, text_only_notice, validate_images, validate_provider,
 )
+from limner.core import validation
 
 # --- validate_images ---
 
@@ -117,3 +118,45 @@ def test_get_api_key_missing_openai_exits(monkeypatch):
 def test_get_api_key_returns_value(monkeypatch):
     monkeypatch.setenv("GEMINI_API_KEY", "test-key-123")
     assert get_api_key("gemini") == "test-key-123"
+
+
+# --- missing_key_message ---
+
+def test_missing_key_message_names_the_key_file_that_exists(tmp_path, monkeypatch):
+    key_file = tmp_path / ".env"
+    key_file.write_text("")
+    monkeypatch.setattr(validation, "resolve_env_file", lambda: key_file)
+    message = missing_key_message("FAL_KEY")
+    assert message.startswith("Error: FAL_KEY is not set")
+    assert str(key_file) in message
+
+
+def test_missing_key_message_says_when_the_key_file_does_not_exist(tmp_path, monkeypatch):
+    key_file = tmp_path / ".env"
+    monkeypatch.setattr(validation, "resolve_env_file", lambda: key_file)
+    message = missing_key_message("FAL_KEY")
+    assert message.startswith("Error: FAL_KEY is not set")
+    assert "does not exist" in message
+    assert str(key_file) in message
+
+
+def test_missing_key_message_says_when_no_key_file_is_known(monkeypatch):
+    monkeypatch.setattr(validation, "resolve_env_file", lambda: None)
+    message = missing_key_message("FAL_KEY")
+    assert message.startswith("Error: FAL_KEY is not set")
+    assert "no key file" in message
+    assert "environment" in message
+
+
+def test_get_api_key_prints_the_message_and_no_other_key_value(tmp_path, monkeypatch, capsys):
+    key_file = tmp_path / ".env"
+    key_file.write_text("")
+    monkeypatch.setattr(validation, "resolve_env_file", lambda: key_file)
+    monkeypatch.delenv("GEMINI_API_KEY", raising=False)
+    monkeypatch.setenv("FAL_KEY", "sentinel-secret-value")
+    with pytest.raises(SystemExit) as exc:
+        get_api_key("gemini")
+    assert exc.value.code == 1
+    out = capsys.readouterr().out
+    assert missing_key_message("GEMINI_API_KEY") in out
+    assert "sentinel-secret-value" not in out

@@ -87,19 +87,19 @@ def test_test_order_writes_into_the_test_store(ws, live, tmp_path, monkeypatch, 
 def test_provider_error_prints_the_written_keys_and_exits_1(ws, live, monkeypatch, capsys):
     monkeypatch.setenv("FAL_KEY", "set")
     assert _run(["--workspace", str(ws)], _order(), monkeypatch, MagicMock(side_effect=RuntimeError("down"))) == 1
-    out = capsys.readouterr().out
-    lines = _lines(out)
-    assert {"Store", "Order", "Receipt", "Error"} <= set(lines) and "Image" not in lines
-    assert "RuntimeError: down" in out
-    labels = _labels(out)
-    assert not {"Copy", "Copies"} & set(labels) and labels[-2:] == ["Receipt", "Error"]
+    captured = capsys.readouterr()
+    lines = _lines(captured.out)
+    assert {"Store", "Order", "Receipt"} <= set(lines) and not {"Image", "Error"} & set(lines)
+    assert captured.err.startswith("Error: ") and "RuntimeError: down" in captured.err
+    labels = _labels(captured.out)
+    assert not {"Copy", "Copies"} & set(labels) and labels[-1] == "Receipt"
 
 
 @pytest.mark.parametrize("raw", [b"", b"not json", _order(provider="dalle"), _order(provider="composite", references=[])])
 def test_validation_failures_write_nothing(raw, ws, live, tmp_path, monkeypatch, capsys):
     out = tmp_path / "out"
     assert _run(["--test", "--workspace", str(ws), "--output-dir", str(out)], raw, monkeypatch) == 1
-    assert capsys.readouterr().out.startswith("Error: ")
+    assert capsys.readouterr().err.startswith("Error: ")
     assert not out.exists() and _files(live) == []
 
 
@@ -140,7 +140,7 @@ def test_text_only_openai_order_prints_the_notice_once_before_the_first_label(ws
 def test_text_only_openai_order_with_an_aspect_ratio_is_refused_and_writes_nothing(ws, live, tmp_path, monkeypatch, capsys):
     raw = _order(provider="openai", references=[], settings={"aspect_ratio": "16:9"})
     assert _run(["--test", "--workspace", str(ws), "--output-dir", str(tmp_path / "out")], raw, monkeypatch) == 1
-    assert capsys.readouterr().out.startswith("Error: ")
+    assert capsys.readouterr().err.startswith("Error: ")
     assert _files(live) == []
 
 
@@ -166,15 +166,15 @@ def test_text_only_test_order_prints_no_notice(ws, live, tmp_path, monkeypatch, 
 def test_a_missing_key_prints_the_error_and_no_notice(ws, live, monkeypatch, capsys):
     monkeypatch.delenv("FAL_KEY", raising=False)
     assert _run(["--workspace", str(ws)], _order(references=[]), monkeypatch, MagicMock()) == 1
-    out = capsys.readouterr().out
-    assert out.startswith("Error: ") and TEXT_ONLY_NOTICE not in out
+    captured = capsys.readouterr()
+    assert captured.err.startswith("Error: ") and TEXT_ONLY_NOTICE not in captured.out + captured.err
 
 
 @pytest.mark.parametrize("extra", [["--file", "p.txt"], ["--provider", "fal"], ["--image", "a.png"],
                                    ["-a", "1:1"], ["inline prompt"]])
 def test_plain_mode_options_are_refused_with_order(extra, ws, live, monkeypatch, capsys):
     assert _run(extra, _order(), monkeypatch) == 1
-    assert capsys.readouterr().out.startswith("Error: ")
+    assert capsys.readouterr().err.startswith("Error: ")
     assert _files(live) == []
 
 
@@ -184,7 +184,7 @@ def test_live_order_needs_an_existing_store_root(value, ws, tmp_path, monkeypatc
         (tmp_path / "file").write_text("x")
     monkeypatch.setenv("LIMNER_STORE_DIR", str(tmp_path / value) if value else "")
     assert _run(["--workspace", str(ws)], _order(), monkeypatch) == 1
-    assert "Error: " in capsys.readouterr().out
+    assert "Error: " in capsys.readouterr().err
 
 
 def test_live_order_checks_the_api_key_before_anything_is_written(ws, live, monkeypatch, capsys):
@@ -201,7 +201,7 @@ def test_unusable_workspaces_are_refused(where, ws, live, tmp_path, monkeypatch,
                  "inside-store": live / "demo-site"}[where]
     workspace.mkdir(exist_ok=True)
     assert _run(["--workspace", str(workspace)], _order(), monkeypatch) == 1
-    assert "workspace" in capsys.readouterr().out
+    assert "workspace" in capsys.readouterr().err
     assert _files(live) == ([] if where != "inside-store" else ["demo-site"])
 
 
@@ -209,7 +209,7 @@ def test_test_mode_with_the_default_output_inside_the_workspace_names_output_dir
     monkeypatch.delenv("LIMNER_OUTPUT_DIR", raising=False)
     monkeypatch.chdir(ws)
     assert _run(["--test"], _order(), monkeypatch) == 1
-    assert "--output-dir" in capsys.readouterr().out
+    assert "--output-dir" in capsys.readouterr().err
     assert not (ws / "output").exists()
 
 
@@ -228,7 +228,7 @@ def test_test_store_and_live_store_must_be_apart(layout, ws, tmp_path, monkeypat
         live.mkdir(parents=True)
     monkeypatch.setenv("LIMNER_STORE_DIR", str(live))
     assert _run(["--test", "--workspace", str(ws), "--output-dir", str(out)], _order(), monkeypatch) == 1
-    assert "Error: " in capsys.readouterr().out
+    assert "Error: " in capsys.readouterr().err
     assert not (out / "test" / "store" / "demo-site").exists()
 
 
@@ -241,7 +241,7 @@ def test_test_store_folders_may_not_be_links(target, ws, tmp_path, monkeypatch, 
     link.parent.mkdir(parents=True, exist_ok=True)
     link.symlink_to(elsewhere)
     assert _run(["--test", "--workspace", str(ws), "--output-dir", str(out)], _order(), monkeypatch) == 1
-    assert "link" in capsys.readouterr().out
+    assert "link" in capsys.readouterr().err
     assert list(elsewhere.iterdir()) == []
 
 
@@ -249,8 +249,9 @@ def test_error_text_can_not_forge_an_output_line(ws, live, monkeypatch, capsys):
     monkeypatch.setenv("FAL_KEY", "set")
     generate = MagicMock(side_effect=RuntimeError("down\nImage: forged.png\x1b[2J"))
     assert _run(["--workspace", str(ws)], _order(), monkeypatch, generate) == 1
-    out = capsys.readouterr().out
-    assert "Image" not in _lines(out) and "\x1b" not in out
+    captured = capsys.readouterr()
+    assert "Image" not in _lines(captured.out) and "Image" not in _lines(captured.err)
+    assert "\x1b" not in captured.out + captured.err
 
 
 def _labels(out):
@@ -285,9 +286,10 @@ def test_a_failed_copy_is_reported_and_the_job_succeeds(ws, live, monkeypatch, c
         return real_link(src, dst, **kwargs)
     monkeypatch.setattr(copies.os, "link", full)
     assert _run(["--workspace", str(ws)], _order(), monkeypatch, MagicMock(return_value=ProviderResult(image=b"img"))) == 0
-    out = capsys.readouterr().out
+    captured = capsys.readouterr()
+    out = captured.out
     assert f"Copy: failed (ENOSPC) {ws / 'out' / 'v01.txt'}" in out.splitlines()
-    assert "Error" not in _labels(out)
+    assert "Error" not in _labels(out) and captured.err == ""
     receipt = json.loads((live / _lines(out)["Receipt"]).read_text())
     assert receipt["status"] == "succeeded"
     assert [(c["path"], c["result"]) for c in receipt["caller_copies"]] == [
@@ -305,8 +307,8 @@ def test_a_receipt_failure_prints_the_copies_before_the_error(ws, live, monkeypa
         return real_create(self, key, data)
     monkeypatch.setattr(FileStore, "create", no_receipt)
     assert _run(["--workspace", str(ws)], _order(), monkeypatch, MagicMock(return_value=ProviderResult(image=b"img"))) == 1
-    labels = _labels(capsys.readouterr().out)
-    assert labels[-3:] == ["Copy", "Copy", "Error"]
+    captured = capsys.readouterr()
+    assert _labels(captured.out)[-2:] == ["Copy", "Copy"] and captured.err.startswith("Error: ")
 
 
 def test_copy_lines_stay_one_line(ws, live, monkeypatch, capsys):
@@ -336,8 +338,35 @@ def test_a_raising_copy_function_is_reported_and_the_job_succeeds(ws, live, monk
     monkeypatch.setattr("limner.generate_logo.bind_copies",
                         lambda folder: MagicMock(side_effect=RuntimeError("upload failed")))
     assert _run(["--workspace", str(ws)], _order(), monkeypatch, MagicMock(return_value=ProviderResult(image=b"img"))) == 0
-    out = capsys.readouterr().out
+    captured = capsys.readouterr()
+    out = captured.out
     image = _lines(out)["Image"].rsplit("/", 1)[1]
     assert [line for line in out.splitlines() if line.startswith("Copy")] == [
         "Copy: failed (RuntimeError) v01.txt", f"Copy: failed (RuntimeError) {image}"]
-    assert "Error" not in _labels(out)
+    assert "Error" not in _labels(out) and captured.err == ""
+
+
+# --- error log ---
+
+def _logged(log):
+    return [json.loads(line) for line in log.read_text().splitlines()]
+
+
+def test_a_live_order_refusal_logs_mode_order(ws, tmp_path, monkeypatch, isolated_error_log):
+    monkeypatch.setenv("LIMNER_STORE_DIR", str(tmp_path / "missing"))
+    assert _run(["--workspace", str(ws)], _order(), monkeypatch) == 1
+    assert _logged(isolated_error_log)[0]["mode"] == "order"
+
+
+def test_an_order_refusal_under_test_logs_mode_test(ws, live, tmp_path, monkeypatch, isolated_error_log):
+    assert _run(["--test", "--workspace", str(ws), "--output-dir", str(tmp_path / "out")], b"not json", monkeypatch) == 1
+    assert _logged(isolated_error_log)[0]["mode"] == "test"
+
+
+def test_an_order_provider_failure_logs_the_receipt_key_the_store_and_the_error_type(ws, live, monkeypatch, isolated_error_log):
+    monkeypatch.setenv("FAL_KEY", "set")
+    assert _run(["--workspace", str(ws)], _order(), monkeypatch, MagicMock(side_effect=RuntimeError("down"))) == 1
+    [entry] = _logged(isolated_error_log)
+    assert (entry["mode"], entry["provider"], entry["error_type"]) == ("order", "fal", "JobError")
+    assert entry["receipt"] and entry["receipt"].endswith(".run.json")
+    assert entry["store"] == str(live)

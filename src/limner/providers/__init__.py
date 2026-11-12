@@ -1,12 +1,11 @@
-import sys
+from limner.core.errorlog import fail
 
 VALID_PROVIDERS = ["gemini", "fal", "openai", "composite"]
 
 
 def resolve_provider(name: str):
     if name not in VALID_PROVIDERS:
-        print(f"Error: unknown provider '{name}'. Valid: {', '.join(VALID_PROVIDERS)}")
-        sys.exit(1)
+        fail(f"Error: unknown provider '{name}'. Valid: {', '.join(VALID_PROVIDERS)}")
     if name == "gemini":
         from .gemini import generate
     elif name == "fal":

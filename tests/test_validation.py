@@ -55,7 +55,7 @@ def test_validate_images_composite_requires_a_reference(capsys):
     with pytest.raises(SystemExit) as exc:
         validate_images([], "composite")
     assert exc.value.code == 1
-    assert "reference image" in capsys.readouterr().out
+    assert "reference image" in capsys.readouterr().err
 
 
 @pytest.mark.parametrize("provider", ["fal", "openai"])
@@ -85,7 +85,7 @@ def test_validate_provider_unknown_exits_cleanly(capsys):
     with pytest.raises(SystemExit) as exc:
         validate_provider("dalle")
     assert exc.value.code == 1
-    assert "unknown provider 'dalle'" in capsys.readouterr().out
+    assert "unknown provider 'dalle'" in capsys.readouterr().err
 
 
 def test_validate_provider_known_passes():
@@ -157,6 +157,6 @@ def test_get_api_key_prints_the_message_and_no_other_key_value(tmp_path, monkeyp
     with pytest.raises(SystemExit) as exc:
         get_api_key("gemini")
     assert exc.value.code == 1
-    out = capsys.readouterr().out
-    assert missing_key_message("GEMINI_API_KEY") in out
-    assert "sentinel-secret-value" not in out
+    captured = capsys.readouterr()
+    assert missing_key_message("GEMINI_API_KEY") in captured.err
+    assert "sentinel-secret-value" not in captured.out + captured.err

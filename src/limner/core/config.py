@@ -51,3 +51,8 @@ def load_keys(env_file: Path | None = None) -> Path | None:
         # A missing file is the key check's to report; override stays off so the environment wins.
         load_dotenv(path, override=False)
     return path
+
+
+def resolve_log_file() -> Path:
+    # Outside both repositories and the same for every workspace; never derived from the current folder.
+    return Path.home() / "Library" / "Logs" / "Limner" / "errors.log"

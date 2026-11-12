@@ -1,8 +1,8 @@
 import os
-import sys
 from pathlib import Path
 
 from limner.core.config import resolve_env_file
+from limner.core.errorlog import fail
 from limner.providers import VALID_PROVIDERS
 
 SUPPORTED_EXTENSIONS: dict[str, set[str]] = {
@@ -63,20 +63,17 @@ def validate_provider(provider: str) -> None:
     try:
         check_provider(provider)
     except InputError as e:
-        print(f"Error: {e}")
-        sys.exit(1)
+        fail(f"Error: {e}")
 
 
 def validate_images(images: list[Path], provider: str) -> None:
     for path in images:
         if not path.exists():
-            print(f"Error: image file not found: {path}")
-            sys.exit(1)
+            fail(f"Error: image file not found: {path}")
     try:
         check_reference_rules(provider, [str(p) for p in images], "--image")
     except InputError as e:
-        print(f"Error: {e}")
-        sys.exit(1)
+        fail(f"Error: {e}")
 
 
 def missing_key_message(var: str) -> str:
@@ -97,6 +94,5 @@ def get_api_key(provider: str) -> str:
     var = API_KEY_VARS[provider]
     key = os.environ.get(var)
     if not key:
-        print(missing_key_message(var))
-        sys.exit(1)
+        fail(missing_key_message(var), error_type="MissingKey")
     return key

@@ -171,7 +171,7 @@ def test_aspect_ratio_malformed_exits(bad, capsys):
     with pytest.raises(SystemExit) as exc:
         resolve_aspect_ratio(_make_args(prompt="p", aspect_ratio=bad), "gemini")
     assert exc.value.code == 1
-    assert "positive integers" in capsys.readouterr().out
+    assert "positive integers" in capsys.readouterr().err
 
 
 def test_malformed_header_ratio_exits(tmp_path):
@@ -191,7 +191,7 @@ def test_aspect_ratio_rejected_for_non_gemini_before_provider_call(provider, cap
         with pytest.raises(SystemExit) as exc:
             main()
     assert exc.value.code == 1
-    assert provider in capsys.readouterr().out
+    assert provider in capsys.readouterr().err
     generate.assert_not_called()
 
 
@@ -200,7 +200,7 @@ def test_header_ratio_rejected_for_non_gemini_provider(tmp_path, capsys):
     f.write_text("# provider: openai\n# aspect_ratio: 16:9\n---\nPrompt")
     with pytest.raises(SystemExit):
         resolve_aspect_ratio(_make_args(file=f, provider="openai"), "openai")
-    assert "openai" in capsys.readouterr().out
+    assert "openai" in capsys.readouterr().err
 
 
 @pytest.mark.parametrize("given,expected", [("16:9", "16:9"), ("2:2", "1:1"), ("32:18", "16:9")])
@@ -232,7 +232,7 @@ def test_fal_unsupported_ratio_exits_before_upload(tmp_path, capsys):
         with pytest.raises(SystemExit) as exc:
             main()
     assert exc.value.code == 1
-    out = capsys.readouterr().out
+    out = capsys.readouterr().err
     for ratio in ("1:1", "4:3", "3:4", "16:9", "9:16"):
         assert ratio in out
     mock_fal.upload_file.assert_not_called()
@@ -317,7 +317,7 @@ def test_provider_error_writes_failed_receipt_and_exits_nonzero(tmp_path, capsys
     with pytest.raises(SystemExit) as exc:
         _run(["--file", str(f)], MagicMock(side_effect=RuntimeError("quota exceeded")))
     assert exc.value.code != 0
-    assert "quota exceeded" in capsys.readouterr().out
+    assert "quota exceeded" in capsys.readouterr().err
     assert not list(tmp_path.glob("*.png"))
     [receipt_path] = tmp_path.glob("*.run.json")
     receipt = json.loads(receipt_path.read_text())
@@ -360,7 +360,7 @@ def test_receipt_write_failure_keeps_image_and_exits_nonzero(tmp_path, capsys):
         with pytest.raises(SystemExit) as exc:
             _run(["--file", str(f)], MagicMock(return_value=ProviderResult(image=b"PNG")))
     assert exc.value.code != 0
-    assert "disk full" in capsys.readouterr().out
+    assert "disk full" in capsys.readouterr().err
     assert len(list(tmp_path.glob("*.png"))) == 1
 
 
@@ -371,7 +371,7 @@ def test_receipt_error_message_is_redacted_but_terminal_is_not(tmp_path, capsys)
     error = RuntimeError(f"request to {url} failed with key {secret}")
     with pytest.raises(SystemExit):
         _run(["--file", str(f)], MagicMock(side_effect=error))
-    assert secret in capsys.readouterr().out
+    assert secret in capsys.readouterr().err
     [receipt_path] = tmp_path.glob("*.run.json")
     text = receipt_path.read_text()
     assert secret not in text and "FAKEFAKE" not in text
@@ -388,7 +388,7 @@ def test_failed_receipt_records_what_was_called_and_the_original_error(tmp_path,
     error.__cause__ = original
     with pytest.raises(SystemExit):
         _run(["--file", str(f)], MagicMock(side_effect=error))
-    assert "RuntimeError: quota exceeded" in capsys.readouterr().out
+    assert "RuntimeError: quota exceeded" in capsys.readouterr().err
     [receipt_path] = tmp_path.glob("*.run.json")
     receipt = json.loads(receipt_path.read_text())
     assert (receipt["endpoint"], receipt["model"], receipt["settings_sent"]) == ("models.example", "m-1", {"n": 1})
@@ -406,7 +406,7 @@ def test_unknown_header_provider_exits_cleanly_before_writing(tmp_path, capsys):
     with pytest.raises(SystemExit) as exc:
         _run(["--file", str(f)], generate)
     assert exc.value.code == 1
-    assert "unknown provider 'dalle'" in capsys.readouterr().out
+    assert "unknown provider 'dalle'" in capsys.readouterr().err
     generate.assert_not_called()
     assert sorted(p.name for p in tmp_path.iterdir()) == ["v01.txt"]
 
@@ -512,8 +512,8 @@ def test_text_only_openai_with_an_aspect_ratio_is_still_refused(tmp_path, capsys
         _run_plain(["--provider", "openai", "-a", "16:9", "--output-dir", str(tmp_path), "p"], generate)
     assert exc.value.code == 1
     generate.assert_not_called()
-    out = capsys.readouterr().out
-    assert "aspect ratio" in out and TEXT_ONLY_NOTICE not in out
+    captured = capsys.readouterr()
+    assert "aspect ratio" in captured.err and TEXT_ONLY_NOTICE not in captured.out + captured.err
 
 
 # ── Test mode ───────────────────────────────────────────────────────────────
@@ -631,7 +631,7 @@ def test_test_mode_refuses_test_root_that_is_not_a_folder(kind, tmp_path, monkey
     with pytest.raises(SystemExit) as exc:
         _run_test_mode(["--output-dir", str(out), "p"])
     assert exc.value.code == 1
-    assert "test folder" in capsys.readouterr().out
+    assert "test folder" in capsys.readouterr().err
     assert list(elsewhere.iterdir()) == []
 
 
@@ -652,7 +652,7 @@ def test_live_run_refused_when_prompt_folder_is_in_test_root(tmp_path, monkeypat
     inside.mkdir(parents=True)
     f = _prompt_file(inside)
     assert _live_file_run(f, out, monkeypatch) == 1
-    assert "test folder" in capsys.readouterr().out
+    assert "test folder" in capsys.readouterr().err
     assert [p.name for p in inside.iterdir()] == ["v01.txt"]
 
 
@@ -663,7 +663,7 @@ def test_live_run_refused_for_linked_prompt_file_in_test_root(tmp_path, monkeypa
     link = out / "test" / "v01.txt"
     link.symlink_to(real)
     assert _live_file_run(link, out, monkeypatch) == 1
-    assert "test folder" in capsys.readouterr().out
+    assert "test folder" in capsys.readouterr().err
     assert [p.name for p in (out / "test").iterdir()] == ["v01.txt"]
 
 
@@ -677,3 +677,83 @@ def test_test_mode_runs_from_a_folder_outside_the_project(tmp_path, monkeypatch)
     _run_test_mode(["--output-dir", str(out), "A blue square"])
     [image] = (out / "test").glob("*.png")
     assert image.with_suffix(".run.json").is_file()
+
+
+# --- error output and the error log ---
+
+from limner.core import errorlog
+from limner.core.writeonce import WriteOnceError
+
+
+def _logged(log):
+    return [json.loads(line) for line in log.read_text().splitlines()]
+
+
+def test_a_refusal_prints_on_standard_error_only_and_is_logged(isolated_error_log, capsys):
+    with pytest.raises(SystemExit) as exc:
+        _run(["--provider", "composite", "p"], MagicMock())
+    assert exc.value.code == 1
+    captured = capsys.readouterr()
+    assert captured.out == "" and captured.err.startswith("Error: ")
+    [entry] = _logged(isolated_error_log)
+    assert (entry["mode"], entry["error_type"], entry["exit_code"]) == ("plain", "Refusal", 1)
+    assert "reference image" in entry["message"] and "prompt" not in entry
+
+
+def test_a_failed_test_mode_run_logs_mode_test(isolated_error_log, tmp_path):
+    with pytest.raises(SystemExit):
+        _run_test_mode(["--output-dir", str(tmp_path / "out"), "--provider", "composite", "p"])
+    assert _logged(isolated_error_log)[0]["mode"] == "test"
+
+
+def test_a_successful_test_mode_run_writes_no_log_entry(isolated_error_log, tmp_path):
+    _run_test_mode(["--output-dir", str(tmp_path / "out"), "p"])
+    assert not isolated_error_log.exists()
+
+
+def test_a_provider_failure_keeps_the_receipt_line_on_standard_output_and_logs_the_receipt(isolated_error_log, tmp_path, capsys):
+    f = _prompt_file(tmp_path)
+    with pytest.raises(SystemExit) as exc:
+        _run(["--file", str(f)], MagicMock(side_effect=RuntimeError("quota exceeded")))
+    assert exc.value.code == 1
+    captured = capsys.readouterr()
+    assert captured.err.startswith("Error: RuntimeError: quota exceeded")
+    assert "Receipt: " in captured.out and "Error" not in captured.out
+    [entry] = _logged(isolated_error_log)
+    assert (entry["mode"], entry["provider"], entry["error_type"]) == ("plain", "gemini", "RuntimeError")
+    assert entry["receipt"].endswith(".run.json") and entry["job_id"]
+
+
+def test_a_failed_receipt_write_after_a_provider_failure_logs_two_entries(isolated_error_log, tmp_path, capsys):
+    f = _prompt_file(tmp_path)
+    with patch("limner.generate_logo.write_receipt", side_effect=WriteOnceError("disk full")):
+        with pytest.raises(SystemExit) as exc:
+            _run(["--file", str(f)], MagicMock(side_effect=RuntimeError("quota exceeded")))
+    assert exc.value.code == 1
+    captured = capsys.readouterr()
+    assert "Receipt:" not in captured.out
+    assert [line for line in captured.err.splitlines() if line.startswith("Error: ")] == [
+        "Error: RuntimeError: quota exceeded", "Error: disk full"]
+    first, second = _logged(isolated_error_log)
+    assert first["receipt"] is None and "quota exceeded" in first["message"]
+    assert (second["error_type"], second["message"]) == ("WriteOnceError", "disk full")
+
+
+def test_an_unexpected_exception_prints_one_error_line_logs_it_and_exits_1(isolated_error_log, monkeypatch, capsys):
+    def explode(args):
+        raise KeyError("boom")
+    monkeypatch.setattr("limner.generate_logo.resolve_config", explode)
+    with pytest.raises(SystemExit) as exc:
+        _run(["p"], MagicMock())
+    assert exc.value.code == 1
+    err = capsys.readouterr().err
+    assert err == "Error: KeyError: 'boom'\n" and "Traceback" not in err
+    [entry] = _logged(isolated_error_log)
+    assert entry["error_type"] == "KeyError" and entry["where"].startswith("test_cli.py:")
+
+
+def test_main_clears_the_remembered_fields_at_entry(isolated_error_log):
+    errorlog.note(job_id="stale")
+    with pytest.raises(SystemExit):
+        _run(["--provider", "composite", "p"], MagicMock())
+    assert _logged(isolated_error_log)[0]["job_id"] is None

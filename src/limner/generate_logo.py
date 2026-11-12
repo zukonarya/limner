@@ -1,10 +1,13 @@
 #!/usr/bin/env python3
+import os
 import sys
 import time
+import traceback
 from pathlib import Path
 
 from limner.core.aspect import AspectError, check_aspect_ratio
 from limner.core.copies import FAILED, bind_copies
+from limner.core.errorlog import fail, note, printable, report, reset
 from limner.core.config import load_keys, resolve_output_dir, resolve_store_root, resolve_test_dir
 from limner.core.job import JobError, run_job
 from limner.core.metadata import parse_header
@@ -113,8 +116,7 @@ def resolve_config(args):
 
     if args.file:
         if not args.file.exists():
-            print(f"Error: prompt file not found: {args.file}")
-            sys.exit(1)
+            fail(f"Error: prompt file not found: {args.file}")
         content = args.file.read_text()
         header, prompt_text = parse_header(content)
         prompt_file = args.file
@@ -142,8 +144,7 @@ def resolve_aspect_ratio(args, provider):
     try:
         return check_aspect_ratio(ratio, provider)
     except AspectError as e:
-        print(f"Error: {e}")
-        sys.exit(1)
+        fail(f"Error: {e}")
 
 
 def build_output_path(folder: Path, stem: str | None, provider: str, timestamp: str) -> Path:
@@ -154,16 +155,14 @@ def build_output_path(folder: Path, stem: str | None, provider: str, timestamp: 
 def prepare_test_dir(test_dir: Path) -> None:
     # A link here could steer test files into a client folder, so only a real folder is accepted.
     if test_dir.is_symlink() or (test_dir.exists() and not test_dir.is_dir()):
-        print(f"Error: the test folder {test_dir} must be a plain folder, not a link or a file.")
-        sys.exit(1)
+        fail(f"Error: the test folder {test_dir} must be a plain folder, not a link or a file.")
     test_dir.mkdir(parents=True, exist_ok=True)
 
 
 def refuse_live_write_into_test_dir(write_dir: Path, test_dir: Path) -> None:
     write_dir, test_dir = write_dir.resolve(), test_dir.resolve()
     if write_dir == test_dir or write_dir.is_relative_to(test_dir):
-        print(f"Error: a live run may not write into the test folder {test_dir}.")
-        sys.exit(1)
+        fail(f"Error: a live run may not write into the test folder {test_dir}.")
 
 
 def run_test_mode(output_path: Path, receipt_fields: dict, provider: str, aspect_ratio: str | None) -> None:
@@ -181,27 +180,20 @@ def run_test_mode(output_path: Path, receipt_fields: dict, provider: str, aspect
             image=output_path.name,
         ))
     except WriteOnceError as e:
-        print(f"Error: {e}")
-        sys.exit(1)
+        fail(f"Error: {e}", error_type="WriteOnceError")
     print("Test run: no provider was called and nothing was charged.")
     print(f"Saved: {output_path}")
     print(f"Receipt: {output_path.with_suffix('.run.json')}")
 
 
-def _printable(text) -> str:
-    # One line, printable only: the agent reads labelled lines, so no text may forge one.
-    return "".join(c if c.isprintable() else " " for c in str(text))
-
-
 def _refuse(message) -> None:
-    print(f"Error: {_printable(message)}")
-    sys.exit(1)
+    fail(f"Error: {message}")
 
 
 def _copy_line(record: dict) -> str:
     result = f"{FAILED} ({record['detail']})" if record["result"] == FAILED else record["result"]
     # The path goes last, so brackets or result words inside it can't change how the line reads.
-    return _printable(f"Copy: {result} {record['path']}")
+    return printable(f"Copy: {result} {record['path']}")
 
 
 def _require_plain_folder(path: Path, what: str) -> None:
@@ -252,6 +244,7 @@ def run_store_mode(args) -> None:
         order = parse_order(raw, workspace, store)
     except OrderError as e:
         _refuse(e)
+    note(provider=order.provider, store=str(store.location))
     if args.test:
         generate = copy = None
         print("Test run: no provider was called and nothing was charged.")
@@ -279,16 +272,30 @@ def run_store_mode(args) -> None:
         if label == "Receipt":
             print(f"{label}: {key}")
     if error:
-        _refuse(error)
+        receipt_key = next((key for label, key in written if label == "Receipt"), None)
+        fail(f"Error: {error}", error_type=type(error).__name__, receipt=receipt_key)
 
 
 def main():
+    reset()
+    try:
+        _main()
+    except Exception as e:
+        # An unexpected crash reads as one error line; the log keeps where it was raised, never the values.
+        frame = traceback.extract_tb(e.__traceback__)[-1]
+        fail(f"Error: {type(e).__name__}: {e}", error_type=type(e).__name__,
+             where=f"{os.path.basename(frame.filename)}:{frame.lineno}")
+
+
+def _main():
     args = parse_args()
+    note(mode="test" if args.test else "order" if args.order else "plain")
     if args.order:
         run_store_mode(args)
         return
     output_dir = resolve_output_dir(args.output_dir)
     provider_name, images, prompt, prompt_file = resolve_config(args)
+    note(provider=provider_name)
     validate_provider(provider_name)
 
     aspect_ratio = resolve_aspect_ratio(args, provider_name)
@@ -312,8 +319,7 @@ def main():
     receipt_path = output_path.with_suffix(".run.json")
     for target in (output_path, receipt_path):
         if target.exists():
-            print(f"Error: refusing to overwrite existing file: {target}")
-            sys.exit(1)
+            fail(f"Error: refusing to overwrite existing file: {target}")
 
     receipt_fields = dict(
         job_id=new_job_id(started_at),
@@ -323,6 +329,7 @@ def main():
         prompt_file=prompt_file.name if prompt_file else None,
         references=images,
     )
+    note(job_id=receipt_fields["job_id"])
 
     if args.test:
         run_test_mode(output_path, receipt_fields, provider_name, aspect_ratio)
@@ -352,13 +359,14 @@ def main():
             finished_at=utc_now(),
             duration_s=elapsed,
         )
-        print(f"Error: {type(original).__name__}: {original}")
+        error_line = f"Error: {type(original).__name__}: {original}"
         try:
             write_receipt(receipt_path, receipt)
         except WriteOnceError as write_error:
-            print(f"Error: {write_error}")
-        else:
-            print(f"Receipt: {receipt_path}")
+            report(error_line, error_type=type(original).__name__)
+            fail(f"Error: {write_error}", error_type="WriteOnceError")
+        report(error_line, error_type=type(original).__name__, receipt=str(receipt_path))
+        print(f"Receipt: {receipt_path}")
         sys.exit(1)
     elapsed = time.time() - start
     print(f"Response received in {elapsed:.1f}s")
@@ -366,8 +374,7 @@ def main():
     try:
         write_once(output_path, result.image)
     except WriteOnceError as e:
-        print(f"Error: {e}")
-        sys.exit(1)
+        fail(f"Error: {e}", error_type="WriteOnceError")
     print(f"Saved: {output_path}")
 
     receipt = build_receipt(
@@ -384,8 +391,7 @@ def main():
     try:
         write_receipt(receipt_path, receipt)
     except WriteOnceError as e:
-        print(f"Error: image saved, but the receipt could not be written: {e}")
-        sys.exit(1)
+        fail(f"Error: image saved, but the receipt could not be written: {e}", error_type="WriteOnceError")
     print(f"Receipt: {receipt_path}")
 
 

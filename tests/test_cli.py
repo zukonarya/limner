@@ -665,3 +665,15 @@ def test_live_run_refused_for_linked_prompt_file_in_test_root(tmp_path, monkeypa
     assert _live_file_run(link, out, monkeypatch) == 1
     assert "test folder" in capsys.readouterr().out
     assert [p.name for p in (out / "test").iterdir()] == ["v01.txt"]
+
+
+def test_test_mode_runs_from_a_folder_outside_the_project(tmp_path, monkeypatch):
+    # Characterization: test mode already works with --output-dir; this pins it for a caller's own folder.
+    _no_keys(monkeypatch)
+    elsewhere = tmp_path / "elsewhere"
+    elsewhere.mkdir()
+    monkeypatch.chdir(elsewhere)
+    out = tmp_path / "out"
+    _run_test_mode(["--output-dir", str(out), "A blue square"])
+    [image] = (out / "test").glob("*.png")
+    assert image.with_suffix(".run.json").is_file()

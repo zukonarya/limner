@@ -3,11 +3,9 @@ import sys
 import time
 from pathlib import Path
 
-from dotenv import load_dotenv
-
 from limner.core.aspect import AspectError, check_aspect_ratio
 from limner.core.copies import FAILED, bind_copies
-from limner.core.config import resolve_output_dir, resolve_store_root, resolve_test_dir
+from limner.core.config import load_keys, resolve_output_dir, resolve_store_root, resolve_test_dir
 from limner.core.job import JobError, run_job
 from limner.core.metadata import parse_header
 from limner.core.order import MAX_ORDER_BYTES, OrderError, parse_order
@@ -19,7 +17,7 @@ from limner.providers import resolve_provider
 from limner.providers.result import ProviderError
 from limner.core.validation import get_api_key, text_only_notice, validate_images, validate_provider
 
-load_dotenv()
+load_keys()
 
 
 def parse_args():

@@ -50,30 +50,31 @@ def test_validate_images_empty_list_passes():
     validate_images([], "gemini")  # text-only — must not raise
 
 
-@pytest.mark.parametrize("provider", ["openai", "composite"])
-def test_validate_images_requires_reference_for_edit_providers(provider, capsys):
+def test_validate_images_composite_requires_a_reference(capsys):
     with pytest.raises(SystemExit) as exc:
-        validate_images([], provider)
+        validate_images([], "composite")
     assert exc.value.code == 1
     assert "reference image" in capsys.readouterr().out
 
 
-def test_validate_images_fal_runs_text_only():
-    validate_images([], "fal")  # fal has a text route; must not raise
+@pytest.mark.parametrize("provider", ["fal", "openai"])
+def test_validate_images_fal_and_openai_run_text_only(provider):
+    validate_images([], provider)  # both have a text route; must not raise
 
 
 # --- text-only notice ---
 
-def test_text_only_notice_for_fal_without_images():
-    assert text_only_notice("fal", []) == TEXT_ONLY_NOTICE
+@pytest.mark.parametrize("provider", ["fal", "openai"])
+def test_text_only_notice_for_fal_and_openai_without_images(provider):
+    assert text_only_notice(provider, []) == TEXT_ONLY_NOTICE
     assert TEXT_ONLY_NOTICE == "No reference images; running the text-only route."
 
 
 @pytest.mark.parametrize("provider,images", [
     ("fal", [Path("ref.png")]),
+    ("openai", [Path("ref.png")]),
     ("gemini", []),
     ("composite", []),
-    ("openai", []),
 ])
 def test_text_only_notice_is_none_otherwise(provider, images):
     assert text_only_notice(provider, images) is None

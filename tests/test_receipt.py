@@ -64,8 +64,24 @@ def test_receipt_has_every_field_with_plain_run_defaults():
     assert r["references"] == []
     assert r["provider_response"] == {
         "request_id": None, "seed": None, "model_version": None, "usage": None,
+        "quality": None, "size": None,
     }
     assert r["limner_version"] == version("limner")
+
+
+@pytest.mark.parametrize("response", [
+    None,
+    {},
+    {"request_id": "r", "seed": 1, "model_version": "m", "usage": {"n": 1}},
+], ids=["test mode", "failed call", "gemini fal or composite result"])
+def test_receipts_without_openai_quality_and_size_show_them_as_null(response):
+    r = make(provider_response=response)
+    assert r["provider_response"]["quality"] is None and r["provider_response"]["size"] is None
+
+
+def test_receipt_keeps_the_quality_and_size_an_openai_result_returns():
+    r = make(provider_response={"quality": "high", "size": "1024x1024"})
+    assert r["provider_response"]["quality"] == "high" and r["provider_response"]["size"] == "1024x1024"
 
 
 def test_receipt_timestamps_are_utc_iso_with_offset():

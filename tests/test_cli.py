@@ -462,13 +462,58 @@ def test_notice_is_absent_for_gemini_text_only(tmp_path, capsys):
     assert TEXT_ONLY_NOTICE not in capsys.readouterr().out
 
 
-def test_openai_without_reference_is_still_refused_before_any_call(tmp_path, capsys):
+def _openai_text_result():
+    return ProviderResult(image=b"PNG", endpoint="images.generate", model="gpt-image-2",
+                          settings_sent={"output_format": "png"},
+                          provider_response={"quality": "high", "size": "1024x1024"})
+
+
+def test_live_openai_without_reference_runs_the_generate_route(tmp_path):
+    generate = MagicMock(return_value=_openai_text_result())
+    key = _run_plain(["--provider", "openai", "--output-dir", str(tmp_path), "p"], generate)
+    key.assert_called_once_with("openai")
+    generate.assert_called_once()
+    assert generate.call_args[0][1] == []
+    [image] = tmp_path.glob("*.png")
+    receipt = json.loads(image.with_suffix(".run.json").read_text())
+    assert receipt["endpoint"] == "images.generate"
+
+
+def test_the_written_receipt_carries_the_returned_quality_and_size(tmp_path):
+    _run_plain(["--provider", "openai", "--output-dir", str(tmp_path), "p"], MagicMock(return_value=_openai_text_result()))
+    [image] = tmp_path.glob("*.png")
+    response = json.loads(image.with_suffix(".run.json").read_text())["provider_response"]
+    assert (response["quality"], response["size"]) == ("high", "1024x1024")
+
+
+def test_a_failed_openai_text_call_leaves_quality_and_size_null_in_the_receipt(tmp_path, capsys):
+    from limner.providers.result import ProviderError
+    error = ProviderError(RuntimeError("rate limited"), endpoint="images.generate", model="gpt-image-2",
+                          settings_sent={"output_format": "png"})
+    with pytest.raises(SystemExit):
+        _run_plain(["--provider", "openai", "--output-dir", str(tmp_path), "p"], MagicMock(side_effect=error))
+    [receipt_path] = tmp_path.glob("*.run.json")
+    receipt = json.loads(receipt_path.read_text())
+    assert receipt["status"] == "failed" and receipt["endpoint"] == "images.generate"
+    assert receipt["provider_response"]["quality"] is None and receipt["provider_response"]["size"] is None
+
+
+def test_text_only_openai_prints_the_notice_once_right_after_generating(tmp_path, capsys):
+    _run_plain(["--provider", "openai", "--output-dir", str(tmp_path), "p"], MagicMock(return_value=_openai_text_result()))
+    out = capsys.readouterr().out
+    lines = out.splitlines()
+    assert out.count(TEXT_ONLY_NOTICE) == 1
+    assert lines[lines.index("Generating with openai...") + 1] == TEXT_ONLY_NOTICE
+
+
+def test_text_only_openai_with_an_aspect_ratio_is_still_refused(tmp_path, capsys):
     generate = MagicMock()
     with pytest.raises(SystemExit) as exc:
-        _run_plain(["--provider", "openai", "--output-dir", str(tmp_path), "p"], generate)
+        _run_plain(["--provider", "openai", "-a", "16:9", "--output-dir", str(tmp_path), "p"], generate)
     assert exc.value.code == 1
     generate.assert_not_called()
-    assert TEXT_ONLY_NOTICE not in capsys.readouterr().out
+    out = capsys.readouterr().out
+    assert "aspect ratio" in out and TEXT_ONLY_NOTICE not in out
 
 
 # ── Test mode ───────────────────────────────────────────────────────────────
@@ -528,6 +573,18 @@ def test_test_mode_text_only_fal_writes_a_placeholder_and_prints_no_notice(tmp_p
     receipt = json.loads(image.with_suffix(".run.json").read_text())
     assert receipt["mode"] == "test" and receipt["provider"] == "fal"
     assert receipt["endpoint"] is None and receipt["references"] == []
+    assert TEXT_ONLY_NOTICE not in capsys.readouterr().out
+
+
+def test_test_mode_text_only_openai_writes_a_placeholder_and_prints_no_notice(tmp_path, monkeypatch, capsys):
+    _no_keys(monkeypatch)
+    out = tmp_path / "out"
+    _run_test_mode(["--provider", "openai", "--output-dir", str(out), "A blue square"])
+    [image] = (out / "test").glob("*.png")
+    receipt = json.loads(image.with_suffix(".run.json").read_text())
+    assert receipt["mode"] == "test" and receipt["provider"] == "openai"
+    assert receipt["endpoint"] is None and receipt["references"] == []
+    assert receipt["provider_response"]["quality"] is None and receipt["provider_response"]["size"] is None
     assert TEXT_ONLY_NOTICE not in capsys.readouterr().out
 
 

@@ -211,6 +211,55 @@ def test_fal_without_ratio_sends_no_image_size(tmp_path):
     }
 
 
+def _fal_text_run(**kwargs):
+    with patch("limner.providers.fal.fal_client") as mock_fal, \
+         patch("urllib.request.urlopen") as mock_urlopen:
+        mock_fal.subscribe.return_value = {"images": [{"url": "https://cdn.fal/out.png"}], "seed": 7}
+        mock_urlopen.return_value.__enter__ = lambda s: s
+        mock_urlopen.return_value.__exit__ = MagicMock(return_value=False)
+        mock_urlopen.return_value.read.return_value = b"bytes"
+
+        from limner.providers.fal import generate
+        result = generate("p", [], **kwargs)
+    return mock_fal, result
+
+
+def test_fal_without_images_calls_text_endpoint_with_no_image_list():
+    mock_fal, result = _fal_text_run()
+
+    mock_fal.upload_file.assert_not_called()
+    assert mock_fal.subscribe.call_args[0][0] == "fal-ai/flux-2-pro"
+    assert mock_fal.subscribe.call_args[1]["arguments"] == {"prompt": "p", "output_format": "png"}
+    assert result.endpoint == "fal-ai/flux-2-pro"
+    assert result.provider_response["seed"] == 7
+
+
+@pytest.mark.parametrize("ratio,size", [
+    ("1:1", "square_hd"),
+    ("4:3", "landscape_4_3"),
+    ("3:4", "portrait_4_3"),
+    ("16:9", "landscape_16_9"),
+    ("9:16", "portrait_16_9"),
+])
+def test_fal_text_route_maps_each_ratio_to_its_preset(ratio, size):
+    mock_fal, result = _fal_text_run(aspect_ratio=ratio)
+
+    assert mock_fal.subscribe.call_args[1]["arguments"] == {"prompt": "p", "output_format": "png", "image_size": size}
+    assert result.settings_sent == {"output_format": "png", "image_size": size}
+
+
+def test_fal_text_failure_carries_the_text_endpoint():
+    original = RuntimeError("job failed")
+    with patch("limner.providers.fal.fal_client") as mock_fal:
+        mock_fal.subscribe.side_effect = original
+        from limner.providers.fal import generate
+        with pytest.raises(ProviderError) as exc:
+            generate("p", [], aspect_ratio="1:1")
+    assert exc.value.__cause__ is original
+    assert exc.value.endpoint == "fal-ai/flux-2-pro"
+    assert exc.value.settings_sent == {"output_format": "png", "image_size": "square_hd"}
+
+
 import base64
 
 # ── OpenAI ───────────────────────────────────────────────────────────────────

@@ -1,6 +1,8 @@
 import pytest
 from pathlib import Path
-from limner.core.validation import validate_images, validate_provider, get_api_key
+from limner.core.validation import (
+    TEXT_ONLY_NOTICE, get_api_key, text_only_notice, validate_images, validate_provider,
+)
 
 # --- validate_images ---
 
@@ -48,12 +50,33 @@ def test_validate_images_empty_list_passes():
     validate_images([], "gemini")  # text-only — must not raise
 
 
-@pytest.mark.parametrize("provider", ["fal", "openai", "composite"])
+@pytest.mark.parametrize("provider", ["openai", "composite"])
 def test_validate_images_requires_reference_for_edit_providers(provider, capsys):
     with pytest.raises(SystemExit) as exc:
         validate_images([], provider)
     assert exc.value.code == 1
     assert "reference image" in capsys.readouterr().out
+
+
+def test_validate_images_fal_runs_text_only():
+    validate_images([], "fal")  # fal has a text route; must not raise
+
+
+# --- text-only notice ---
+
+def test_text_only_notice_for_fal_without_images():
+    assert text_only_notice("fal", []) == TEXT_ONLY_NOTICE
+    assert TEXT_ONLY_NOTICE == "No reference images; running the text-only route."
+
+
+@pytest.mark.parametrize("provider,images", [
+    ("fal", [Path("ref.png")]),
+    ("gemini", []),
+    ("composite", []),
+    ("openai", []),
+])
+def test_text_only_notice_is_none_otherwise(provider, images):
+    assert text_only_notice(provider, images) is None
 
 
 def test_validate_provider_unknown_exits_cleanly(capsys):

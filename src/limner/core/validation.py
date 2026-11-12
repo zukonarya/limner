@@ -11,9 +11,22 @@ SUPPORTED_EXTENSIONS: dict[str, set[str]] = {
     "composite": {".png", ".jpg", ".jpeg", ".webp"},
 }
 
-# These routes edit a reference image; without one they fail only after the
-# call (fal: at the remote API), so the check runs before anything is sent.
-NEEDS_REFERENCE = {"fal", "openai", "composite"}
+# These routes only edit or composite a reference image, so they are refused
+# before anything is sent when none is given. openai stays here until it has a
+# text route; fal runs text-only on its own endpoint.
+NEEDS_REFERENCE = {"openai", "composite"}
+
+# Paid routes that run text-only without being asked to: the caller is told once,
+# because a forgotten --image used to be refused for free. Fixed text on purpose:
+# the agent reads labelled output lines, so nothing variable may appear here.
+TEXT_ONLY_NOTICE = "No reference images; running the text-only route."
+TEXT_ONLY_NOTICE_PROVIDERS = {"fal"}
+
+
+def text_only_notice(provider: str, images) -> str | None:
+    if provider in TEXT_ONLY_NOTICE_PROVIDERS and not images:
+        return TEXT_ONLY_NOTICE
+    return None
 
 API_KEY_VARS: dict[str, str] = {
     "gemini": "GEMINI_API_KEY",

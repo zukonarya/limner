@@ -9,8 +9,10 @@ description = "Programmatic logo and product-image generation CLI"
 requires-python = ">=3.13"
 dependencies = [
     "google-genai>=2.8.0,<3",
-    "fal-client>=0.10.0",
-    "openai>=2.41.0",
+    # Ceilings sit at the next major above the versions run through the installed command on 2026-11-13
+    # (openai 3.49.0, fal-client 1.0.3, google-genai 2.34.0), so a reinstall cannot pull an untested major.
+    "fal-client>=0.10.0,<2",
+    "openai>=2.41.0,<4",
     "Pillow>=10.0.0",
     "python-dotenv>=1.0.0",
     "numpy>=2.4.0",

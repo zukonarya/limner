@@ -1,7 +1,9 @@
+import base64
 import io
 import json
 import sys
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -370,3 +372,40 @@ def test_an_order_provider_failure_logs_the_receipt_key_the_store_and_the_error_
     assert (entry["mode"], entry["provider"], entry["error_type"]) == ("order", "fal", "JobError")
     assert entry["receipt"] and entry["receipt"].endswith(".run.json")
     assert entry["store"] == str(live)
+
+
+# --- gaps found by the counter-checks (U2a + U2b, U7) ---
+
+def _receipt(live, out):
+    return json.loads((live / _lines(out)["Receipt"]).read_text())
+
+
+def test_a_text_only_fal_order_receipt_names_the_text_endpoint(ws, live, monkeypatch, capsys):
+    from limner.providers.fal import generate
+    monkeypatch.setenv("FAL_KEY", "set")
+    with patch("limner.providers.fal.fal_client") as fal, patch("urllib.request.urlopen") as urlopen:
+        fal.subscribe.return_value = {"images": [{"url": "https://cdn.fal/out.png"}]}
+        urlopen.return_value.__enter__ = lambda s: s
+        urlopen.return_value.__exit__ = MagicMock(return_value=False)
+        urlopen.return_value.read.return_value = b"img"
+        assert _run(["--workspace", str(ws)], _order(references=[]), monkeypatch, generate) == 0
+    assert fal.subscribe.call_args[0][0] == "fal-ai/flux-2-pro"
+    assert _receipt(live, capsys.readouterr().out)["endpoint"] == "fal-ai/flux-2-pro"
+
+
+def test_a_text_only_openai_order_receipt_names_the_generate_endpoint(ws, live, monkeypatch, capsys):
+    from limner.providers.openai_provider import generate
+    monkeypatch.setenv("OPENAI_API_KEY", "set")
+    reply = SimpleNamespace(data=[SimpleNamespace(b64_json=base64.b64encode(b"img").decode())], usage=None)
+    with patch("limner.providers.openai_provider.OpenAI") as client:
+        client.return_value.images.generate.return_value = reply
+        assert _run(["--workspace", str(ws)], _order(provider="openai", references=[]), monkeypatch, generate) == 0
+    client.return_value.images.edit.assert_not_called()
+    assert _receipt(live, capsys.readouterr().out)["endpoint"] == "images.generate"
+
+
+def test_an_order_failure_logs_a_null_job_id(ws, live, isolated_error_log, monkeypatch):
+    monkeypatch.setenv("FAL_KEY", "set")
+    assert _run(["--workspace", str(ws)], _order(), monkeypatch, MagicMock(side_effect=RuntimeError("down"))) == 1
+    [entry] = [json.loads(line) for line in isolated_error_log.read_text().splitlines()]
+    assert entry["job_id"] is None and entry["store"] == str(live) and entry["receipt"].endswith(".run.json")

@@ -1,6 +1,8 @@
 import json
 import os
+import signal
 import stat
+from contextlib import contextmanager
 
 import pytest
 
@@ -128,3 +130,63 @@ def test_a_failure_resolving_the_log_path_keeps_the_original_line_and_adds_one_n
     err = capsys.readouterr().err.splitlines()
     assert err[0] == "Error: original"
     assert err[1] == "Note: error log not written: no home folder"
+
+
+class _Hung(BaseException):
+    """Not an Exception, so the code under test cannot swallow it as a log-write failure."""
+
+
+@contextmanager
+def _deadline(seconds):
+    def expired(signum, frame):
+        raise _Hung("the call did not return")
+    previous = signal.signal(signal.SIGALRM, expired)
+    signal.alarm(seconds)
+    try:
+        yield
+    finally:
+        signal.alarm(0)
+        signal.signal(signal.SIGALRM, previous)
+
+
+def test_a_named_pipe_at_the_log_path_does_not_hang_a_failing_run(isolated_error_log, capsys):
+    isolated_error_log.parent.mkdir(exist_ok=True)
+    os.mkfifo(isolated_error_log)
+    with _deadline(3):
+        errorlog.report("Error: original")
+    err = capsys.readouterr().err.splitlines()
+    assert err[0] == "Error: original"
+    assert len(err) == 2 and err[1].startswith("Note: error log not written: ")
+
+
+def test_a_named_pipe_with_a_reader_is_refused_as_not_a_regular_file(isolated_error_log, capsys):
+    isolated_error_log.parent.mkdir(exist_ok=True)
+    os.mkfifo(isolated_error_log)
+    reader = os.open(isolated_error_log, os.O_RDONLY | os.O_NONBLOCK)
+    try:
+        with _deadline(3):
+            errorlog.report("Error: original")
+    finally:
+        os.close(reader)
+    err = capsys.readouterr().err.splitlines()
+    assert err[0] == "Error: original"
+    assert len(err) == 2 and "not a private regular file" in err[1]
+
+
+def test_an_existing_log_owned_by_someone_else_is_not_written(isolated_error_log, monkeypatch, capsys):
+    isolated_error_log.parent.mkdir(exist_ok=True)
+    isolated_error_log.write_text("")
+    isolated_error_log.chmod(0o600)
+    # Replacing getuid tests the owner check without needing a second user or root.
+    monkeypatch.setattr(os, "getuid", lambda: os.stat(isolated_error_log).st_uid + 1)
+    errorlog.report("Error: one")
+    assert isolated_error_log.read_text() == ""
+    assert "Note: error log not written: " in capsys.readouterr().err
+
+
+def test_an_existing_log_folder_keeps_its_permissions(isolated_error_log):
+    isolated_error_log.parent.mkdir(exist_ok=True)
+    isolated_error_log.parent.chmod(0o755)
+    errorlog.report("Error: one")
+    assert stat.S_IMODE(isolated_error_log.parent.stat().st_mode) == 0o755
+    assert len(_entries(isolated_error_log)) == 1

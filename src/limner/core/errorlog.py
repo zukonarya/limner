@@ -61,7 +61,9 @@ def _append(text: str) -> None:
         # mkdir's mode is filtered by the umask, so the owner-only mode is set explicitly.
         path.parent.chmod(0o700)
     # O_NOFOLLOW: a link planted where the log belongs must not redirect the write.
-    fd = os.open(path, os.O_WRONLY | os.O_APPEND | os.O_CREAT | os.O_NOFOLLOW, 0o600)
+    # O_NONBLOCK: opening a named pipe for writing otherwise waits for a reader forever; with it the open fails
+    # (or the check below refuses the non-regular file) and the caller prints a Note instead of hanging.
+    fd = os.open(path, os.O_WRONLY | os.O_APPEND | os.O_CREAT | os.O_NOFOLLOW | os.O_NONBLOCK, 0o600)
     try:
         info = os.fstat(fd)
         if not stat.S_ISREG(info.st_mode) or info.st_uid != os.getuid() or info.st_mode & 0o077:

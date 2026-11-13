@@ -211,6 +211,55 @@ def test_fal_without_ratio_sends_no_image_size(tmp_path):
     }
 
 
+def _fal_text_run(**kwargs):
+    with patch("limner.providers.fal.fal_client") as mock_fal, \
+         patch("urllib.request.urlopen") as mock_urlopen:
+        mock_fal.subscribe.return_value = {"images": [{"url": "https://cdn.fal/out.png"}], "seed": 7}
+        mock_urlopen.return_value.__enter__ = lambda s: s
+        mock_urlopen.return_value.__exit__ = MagicMock(return_value=False)
+        mock_urlopen.return_value.read.return_value = b"bytes"
+
+        from limner.providers.fal import generate
+        result = generate("p", [], **kwargs)
+    return mock_fal, result
+
+
+def test_fal_without_images_calls_text_endpoint_with_no_image_list():
+    mock_fal, result = _fal_text_run()
+
+    mock_fal.upload_file.assert_not_called()
+    assert mock_fal.subscribe.call_args[0][0] == "fal-ai/flux-2-pro"
+    assert mock_fal.subscribe.call_args[1]["arguments"] == {"prompt": "p", "output_format": "png"}
+    assert result.endpoint == "fal-ai/flux-2-pro"
+    assert result.provider_response["seed"] == 7
+
+
+@pytest.mark.parametrize("ratio,size", [
+    ("1:1", "square_hd"),
+    ("4:3", "landscape_4_3"),
+    ("3:4", "portrait_4_3"),
+    ("16:9", "landscape_16_9"),
+    ("9:16", "portrait_16_9"),
+])
+def test_fal_text_route_maps_each_ratio_to_its_preset(ratio, size):
+    mock_fal, result = _fal_text_run(aspect_ratio=ratio)
+
+    assert mock_fal.subscribe.call_args[1]["arguments"] == {"prompt": "p", "output_format": "png", "image_size": size}
+    assert result.settings_sent == {"output_format": "png", "image_size": size}
+
+
+def test_fal_text_failure_carries_the_text_endpoint():
+    original = RuntimeError("job failed")
+    with patch("limner.providers.fal.fal_client") as mock_fal:
+        mock_fal.subscribe.side_effect = original
+        from limner.providers.fal import generate
+        with pytest.raises(ProviderError) as exc:
+            generate("p", [], aspect_ratio="1:1")
+    assert exc.value.__cause__ is original
+    assert exc.value.endpoint == "fal-ai/flux-2-pro"
+    assert exc.value.settings_sent == {"output_format": "png", "image_size": "square_hd"}
+
+
 import base64
 
 # ── OpenAI ───────────────────────────────────────────────────────────────────
@@ -336,7 +385,7 @@ def test_openai_metadata_serialises_usage_with_nested_details(mock_openai_cls, t
     assert result.settings_sent == {"output_format": "png"}
     assert result.provider_response == {
         "request_id": "req-oa", "seed": None, "model_version": None,
-        "usage": usage.model_dump(mode="json"),
+        "usage": usage.model_dump(mode="json"), "quality": None, "size": None,
     }
     assert result.provider_response["usage"]["input_tokens_details"] == {
         "image_tokens": 4, "text_tokens": 6,
@@ -356,7 +405,96 @@ def test_openai_metadata_is_null_when_missing(mock_openai_cls, tmp_path):
 
     assert result.provider_response == {
         "request_id": None, "seed": None, "model_version": None, "usage": None,
+        "quality": None, "size": None,
     }
+
+
+from types import SimpleNamespace
+
+
+def _openai_result(raw=b"x", **extra):
+    return SimpleNamespace(data=[SimpleNamespace(b64_json=base64.b64encode(raw).decode())], usage=None, **extra)
+
+
+@patch("limner.providers.openai_provider.OpenAI")
+def test_openai_without_images_calls_generate_with_no_image_input(mock_openai_cls):
+    client = mock_openai_cls.return_value
+    client.images.generate.return_value = _openai_result(b"OUT")
+
+    from limner.providers.openai_provider import generate
+    result = generate("A prompt", [])
+
+    client.images.edit.assert_not_called()
+    assert client.images.generate.call_args.kwargs == {
+        "model": "gpt-image-2", "prompt": "A prompt", "output_format": "png",
+    }
+    assert (result.endpoint, result.model) == ("images.generate", "gpt-image-2")
+    assert result.settings_sent == {"output_format": "png"}
+    assert result.image == b"OUT"
+
+
+@patch("limner.providers.openai_provider.OpenAI")
+def test_openai_with_images_still_calls_images_edit(mock_openai_cls, tmp_path):
+    img = tmp_path / "a.png"
+    img.write_bytes(b"fake")
+    client = mock_openai_cls.return_value
+    client.images.edit.return_value = _openai_result()
+
+    from limner.providers.openai_provider import generate
+    result = generate("p", [img])
+
+    client.images.generate.assert_not_called()
+    assert result.endpoint == "images.edit"
+
+
+@patch("limner.providers.openai_provider.OpenAI")
+def test_openai_stores_the_quality_and_size_the_response_returns(mock_openai_cls):
+    mock_openai_cls.return_value.images.generate.return_value = ImagesResponse(
+        created=1, data=[{"b64_json": base64.b64encode(b"x").decode()}], quality="high", size="1024x1024",
+    )
+
+    from limner.providers.openai_provider import generate
+    result = generate("p", [])
+
+    assert result.provider_response["quality"] == "high"
+    assert result.provider_response["size"] == "1024x1024"
+    assert result.settings_sent == {"output_format": "png"}
+
+
+@pytest.mark.parametrize("value", ["a" * 21, "High", "high\n", "hi gh", "", 5, None, ["high"]],
+                         ids=["too long", "uppercase", "trailing newline", "space", "empty", "number", "none", "list"])
+@patch("limner.providers.openai_provider.OpenAI")
+def test_openai_stores_null_for_a_quality_or_size_that_is_not_a_short_token(mock_openai_cls, value):
+    mock_openai_cls.return_value.images.generate.return_value = _openai_result(quality=value, size=value)
+
+    from limner.providers.openai_provider import generate
+    result = generate("p", [])
+
+    assert result.provider_response["quality"] is None and result.provider_response["size"] is None
+
+
+@patch("limner.providers.openai_provider.OpenAI")
+def test_openai_result_without_quality_or_size_gives_null_not_an_error(mock_openai_cls):
+    mock_openai_cls.return_value.images.generate.return_value = _openai_result()
+
+    from limner.providers.openai_provider import generate
+    result = generate("p", [])
+
+    assert result.provider_response["quality"] is None and result.provider_response["size"] is None
+
+
+@patch("limner.providers.openai_provider.OpenAI")
+def test_openai_generate_failure_carries_the_generate_endpoint(mock_openai_cls):
+    original = RuntimeError("rate limited")
+    mock_openai_cls.return_value.images.generate.side_effect = original
+
+    from limner.providers.openai_provider import generate
+    with pytest.raises(ProviderError) as exc:
+        generate("p", [])
+
+    assert exc.value.__cause__ is original
+    assert (exc.value.endpoint, exc.value.model) == ("images.generate", "gpt-image-2")
+    assert exc.value.settings_sent == {"output_format": "png"}
 
 
 @patch.dict(os.environ, {"GEMINI_API_KEY": "test-key"})

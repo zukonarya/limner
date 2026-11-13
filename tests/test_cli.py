@@ -133,6 +133,7 @@ from datetime import datetime, timezone
 from unittest.mock import MagicMock, patch
 from limner.providers.result import ProviderResult
 from limner.generate_logo import resolve_aspect_ratio, parse_args, main
+from limner.core.validation import TEXT_ONLY_NOTICE
 
 
 def test_aspect_ratio_unset_by_default(tmp_path):
@@ -170,7 +171,7 @@ def test_aspect_ratio_malformed_exits(bad, capsys):
     with pytest.raises(SystemExit) as exc:
         resolve_aspect_ratio(_make_args(prompt="p", aspect_ratio=bad), "gemini")
     assert exc.value.code == 1
-    assert "positive integers" in capsys.readouterr().out
+    assert "positive integers" in capsys.readouterr().err
 
 
 def test_malformed_header_ratio_exits(tmp_path):
@@ -190,7 +191,7 @@ def test_aspect_ratio_rejected_for_non_gemini_before_provider_call(provider, cap
         with pytest.raises(SystemExit) as exc:
             main()
     assert exc.value.code == 1
-    assert provider in capsys.readouterr().out
+    assert provider in capsys.readouterr().err
     generate.assert_not_called()
 
 
@@ -199,7 +200,7 @@ def test_header_ratio_rejected_for_non_gemini_provider(tmp_path, capsys):
     f.write_text("# provider: openai\n# aspect_ratio: 16:9\n---\nPrompt")
     with pytest.raises(SystemExit):
         resolve_aspect_ratio(_make_args(file=f, provider="openai"), "openai")
-    assert "openai" in capsys.readouterr().out
+    assert "openai" in capsys.readouterr().err
 
 
 @pytest.mark.parametrize("given,expected", [("16:9", "16:9"), ("2:2", "1:1"), ("32:18", "16:9")])
@@ -231,7 +232,7 @@ def test_fal_unsupported_ratio_exits_before_upload(tmp_path, capsys):
         with pytest.raises(SystemExit) as exc:
             main()
     assert exc.value.code == 1
-    out = capsys.readouterr().out
+    out = capsys.readouterr().err
     for ratio in ("1:1", "4:3", "3:4", "16:9", "9:16"):
         assert ratio in out
     mock_fal.upload_file.assert_not_called()
@@ -316,7 +317,7 @@ def test_provider_error_writes_failed_receipt_and_exits_nonzero(tmp_path, capsys
     with pytest.raises(SystemExit) as exc:
         _run(["--file", str(f)], MagicMock(side_effect=RuntimeError("quota exceeded")))
     assert exc.value.code != 0
-    assert "quota exceeded" in capsys.readouterr().out
+    assert "quota exceeded" in capsys.readouterr().err
     assert not list(tmp_path.glob("*.png"))
     [receipt_path] = tmp_path.glob("*.run.json")
     receipt = json.loads(receipt_path.read_text())
@@ -359,7 +360,7 @@ def test_receipt_write_failure_keeps_image_and_exits_nonzero(tmp_path, capsys):
         with pytest.raises(SystemExit) as exc:
             _run(["--file", str(f)], MagicMock(return_value=ProviderResult(image=b"PNG")))
     assert exc.value.code != 0
-    assert "disk full" in capsys.readouterr().out
+    assert "disk full" in capsys.readouterr().err
     assert len(list(tmp_path.glob("*.png"))) == 1
 
 
@@ -370,7 +371,7 @@ def test_receipt_error_message_is_redacted_but_terminal_is_not(tmp_path, capsys)
     error = RuntimeError(f"request to {url} failed with key {secret}")
     with pytest.raises(SystemExit):
         _run(["--file", str(f)], MagicMock(side_effect=error))
-    assert secret in capsys.readouterr().out
+    assert secret in capsys.readouterr().err
     [receipt_path] = tmp_path.glob("*.run.json")
     text = receipt_path.read_text()
     assert secret not in text and "FAKEFAKE" not in text
@@ -387,7 +388,7 @@ def test_failed_receipt_records_what_was_called_and_the_original_error(tmp_path,
     error.__cause__ = original
     with pytest.raises(SystemExit):
         _run(["--file", str(f)], MagicMock(side_effect=error))
-    assert "RuntimeError: quota exceeded" in capsys.readouterr().out
+    assert "RuntimeError: quota exceeded" in capsys.readouterr().err
     [receipt_path] = tmp_path.glob("*.run.json")
     receipt = json.loads(receipt_path.read_text())
     assert (receipt["endpoint"], receipt["model"], receipt["settings_sent"]) == ("models.example", "m-1", {"n": 1})
@@ -405,22 +406,114 @@ def test_unknown_header_provider_exits_cleanly_before_writing(tmp_path, capsys):
     with pytest.raises(SystemExit) as exc:
         _run(["--file", str(f)], generate)
     assert exc.value.code == 1
-    assert "unknown provider 'dalle'" in capsys.readouterr().out
+    assert "unknown provider 'dalle'" in capsys.readouterr().err
     generate.assert_not_called()
     assert sorted(p.name for p in tmp_path.iterdir()) == ["v01.txt"]
 
 
-def test_live_fal_without_reference_exits_before_key_check(tmp_path):
-    generate = MagicMock()
-    with patch.object(sys, "argv", ["limner-generate", "--provider", "fal", "--output-dir", str(tmp_path), "p"]), \
+def _run_plain(argv, generate):
+    with patch.object(sys, "argv", ["limner-generate", *argv]), \
          patch("limner.generate_logo.resolve_provider", return_value=generate), \
          patch("limner.generate_logo.get_api_key") as key:
-        with pytest.raises(SystemExit) as exc:
-            main()
+        main()
+    return key
+
+
+def _fal_text_result():
+    return ProviderResult(image=b"PNG", endpoint="fal-ai/flux-2-pro", settings_sent={"output_format": "png"})
+
+
+def test_live_fal_without_reference_runs_the_text_route(tmp_path):
+    generate = MagicMock(return_value=_fal_text_result())
+    key = _run_plain(["--provider", "fal", "--output-dir", str(tmp_path), "p"], generate)
+    key.assert_called_once_with("fal")
+    generate.assert_called_once()
+    assert generate.call_args[0][1] == []
+    [image] = tmp_path.glob("*.png")
+    receipt = json.loads(image.with_suffix(".run.json").read_text())
+    assert receipt["endpoint"] == "fal-ai/flux-2-pro"
+
+
+def test_text_only_fal_prints_the_notice_once_right_after_generating(tmp_path, capsys):
+    _run_plain(["--provider", "fal", "--output-dir", str(tmp_path), "p"], MagicMock(return_value=_fal_text_result()))
+    out = capsys.readouterr().out
+    lines = out.splitlines()
+    assert out.count(TEXT_ONLY_NOTICE) == 1
+    assert lines[lines.index("Generating with fal...") + 1] == TEXT_ONLY_NOTICE
+
+
+def test_notice_is_absent_when_a_reference_is_given(tmp_path, capsys):
+    generate = MagicMock(return_value=_fal_text_result())
+    _run_plain(["--provider", "fal", "--output-dir", str(tmp_path), "--image", str(_reference(tmp_path)), "p"], generate)
+    assert TEXT_ONLY_NOTICE not in capsys.readouterr().out
+
+
+def test_notice_is_absent_when_the_prompt_file_header_supplies_images(tmp_path, capsys):
+    ref = _reference(tmp_path)
+    f = tmp_path / "v01.txt"
+    f.write_text(f"# provider: fal\n# images: {ref.name}\n---\nA blue square\n")
+    _run_plain(["--file", str(f)], MagicMock(return_value=_fal_text_result()))
+    out = capsys.readouterr().out
+    assert "Generating with fal..." in out and TEXT_ONLY_NOTICE not in out
+
+
+def test_notice_is_absent_for_gemini_text_only(tmp_path, capsys):
+    _run_plain(["--provider", "gemini", "--output-dir", str(tmp_path), "p"], MagicMock(return_value=ProviderResult(image=b"PNG")))
+    assert TEXT_ONLY_NOTICE not in capsys.readouterr().out
+
+
+def _openai_text_result():
+    return ProviderResult(image=b"PNG", endpoint="images.generate", model="gpt-image-2",
+                          settings_sent={"output_format": "png"},
+                          provider_response={"quality": "high", "size": "1024x1024"})
+
+
+def test_live_openai_without_reference_runs_the_generate_route(tmp_path):
+    generate = MagicMock(return_value=_openai_text_result())
+    key = _run_plain(["--provider", "openai", "--output-dir", str(tmp_path), "p"], generate)
+    key.assert_called_once_with("openai")
+    generate.assert_called_once()
+    assert generate.call_args[0][1] == []
+    [image] = tmp_path.glob("*.png")
+    receipt = json.loads(image.with_suffix(".run.json").read_text())
+    assert receipt["endpoint"] == "images.generate"
+
+
+def test_the_written_receipt_carries_the_returned_quality_and_size(tmp_path):
+    _run_plain(["--provider", "openai", "--output-dir", str(tmp_path), "p"], MagicMock(return_value=_openai_text_result()))
+    [image] = tmp_path.glob("*.png")
+    response = json.loads(image.with_suffix(".run.json").read_text())["provider_response"]
+    assert (response["quality"], response["size"]) == ("high", "1024x1024")
+
+
+def test_a_failed_openai_text_call_leaves_quality_and_size_null_in_the_receipt(tmp_path, capsys):
+    from limner.providers.result import ProviderError
+    error = ProviderError(RuntimeError("rate limited"), endpoint="images.generate", model="gpt-image-2",
+                          settings_sent={"output_format": "png"})
+    with pytest.raises(SystemExit):
+        _run_plain(["--provider", "openai", "--output-dir", str(tmp_path), "p"], MagicMock(side_effect=error))
+    [receipt_path] = tmp_path.glob("*.run.json")
+    receipt = json.loads(receipt_path.read_text())
+    assert receipt["status"] == "failed" and receipt["endpoint"] == "images.generate"
+    assert receipt["provider_response"]["quality"] is None and receipt["provider_response"]["size"] is None
+
+
+def test_text_only_openai_prints_the_notice_once_right_after_generating(tmp_path, capsys):
+    _run_plain(["--provider", "openai", "--output-dir", str(tmp_path), "p"], MagicMock(return_value=_openai_text_result()))
+    out = capsys.readouterr().out
+    lines = out.splitlines()
+    assert out.count(TEXT_ONLY_NOTICE) == 1
+    assert lines[lines.index("Generating with openai...") + 1] == TEXT_ONLY_NOTICE
+
+
+def test_text_only_openai_with_an_aspect_ratio_is_still_refused(tmp_path, capsys):
+    generate = MagicMock()
+    with pytest.raises(SystemExit) as exc:
+        _run_plain(["--provider", "openai", "-a", "16:9", "--output-dir", str(tmp_path), "p"], generate)
     assert exc.value.code == 1
-    key.assert_not_called()
     generate.assert_not_called()
-    assert list(tmp_path.iterdir()) == []
+    captured = capsys.readouterr()
+    assert "aspect ratio" in captured.err and TEXT_ONLY_NOTICE not in captured.out + captured.err
 
 
 # ── Test mode ───────────────────────────────────────────────────────────────
@@ -472,6 +565,29 @@ def test_test_mode_writes_placeholder_and_test_receipt(provider, tmp_path, monke
     assert Image.open(image).size == (1024, 1024)
 
 
+def test_test_mode_text_only_fal_writes_a_placeholder_and_prints_no_notice(tmp_path, monkeypatch, capsys):
+    _no_keys(monkeypatch)
+    out = tmp_path / "out"
+    _run_test_mode(["--provider", "fal", "--output-dir", str(out), "A blue square"])
+    [image] = (out / "test").glob("*.png")
+    receipt = json.loads(image.with_suffix(".run.json").read_text())
+    assert receipt["mode"] == "test" and receipt["provider"] == "fal"
+    assert receipt["endpoint"] is None and receipt["references"] == []
+    assert TEXT_ONLY_NOTICE not in capsys.readouterr().out
+
+
+def test_test_mode_text_only_openai_writes_a_placeholder_and_prints_no_notice(tmp_path, monkeypatch, capsys):
+    _no_keys(monkeypatch)
+    out = tmp_path / "out"
+    _run_test_mode(["--provider", "openai", "--output-dir", str(out), "A blue square"])
+    [image] = (out / "test").glob("*.png")
+    receipt = json.loads(image.with_suffix(".run.json").read_text())
+    assert receipt["mode"] == "test" and receipt["provider"] == "openai"
+    assert receipt["endpoint"] is None and receipt["references"] == []
+    assert receipt["provider_response"]["quality"] is None and receipt["provider_response"]["size"] is None
+    assert TEXT_ONLY_NOTICE not in capsys.readouterr().out
+
+
 def test_test_mode_with_file_leaves_prompt_folder_unchanged(tmp_path, monkeypatch):
     _no_keys(monkeypatch)
     project = tmp_path / "project"
@@ -494,6 +610,8 @@ def test_test_mode_fal_with_ratio_imports_no_provider_module(tmp_path):
         "print('LEAK' if {'limner.providers.fal', 'fal_client'} & set(sys.modules) else 'CLEAN')"
     )
     env = {k: v for k, v in os.environ.items() if k not in KEY_VARS}
+    # The child has no test fixture, so a stray failure would otherwise write to the real ~/Library/Logs/Limner.
+    env["HOME"] = str(tmp_path / "home")
     run = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True, env=env, cwd=tmp_path)
     assert run.returncode == 0, run.stdout + run.stderr
     assert run.stdout.strip().endswith("CLEAN")
@@ -515,7 +633,7 @@ def test_test_mode_refuses_test_root_that_is_not_a_folder(kind, tmp_path, monkey
     with pytest.raises(SystemExit) as exc:
         _run_test_mode(["--output-dir", str(out), "p"])
     assert exc.value.code == 1
-    assert "test folder" in capsys.readouterr().out
+    assert "test folder" in capsys.readouterr().err
     assert list(elsewhere.iterdir()) == []
 
 
@@ -536,7 +654,7 @@ def test_live_run_refused_when_prompt_folder_is_in_test_root(tmp_path, monkeypat
     inside.mkdir(parents=True)
     f = _prompt_file(inside)
     assert _live_file_run(f, out, monkeypatch) == 1
-    assert "test folder" in capsys.readouterr().out
+    assert "test folder" in capsys.readouterr().err
     assert [p.name for p in inside.iterdir()] == ["v01.txt"]
 
 
@@ -547,5 +665,191 @@ def test_live_run_refused_for_linked_prompt_file_in_test_root(tmp_path, monkeypa
     link = out / "test" / "v01.txt"
     link.symlink_to(real)
     assert _live_file_run(link, out, monkeypatch) == 1
-    assert "test folder" in capsys.readouterr().out
+    assert "test folder" in capsys.readouterr().err
     assert [p.name for p in (out / "test").iterdir()] == ["v01.txt"]
+
+
+def test_test_mode_runs_from_a_folder_outside_the_project(tmp_path, monkeypatch):
+    # Characterization: test mode already works with --output-dir; this pins it for a caller's own folder.
+    _no_keys(monkeypatch)
+    elsewhere = tmp_path / "elsewhere"
+    elsewhere.mkdir()
+    monkeypatch.chdir(elsewhere)
+    out = tmp_path / "out"
+    _run_test_mode(["--output-dir", str(out), "A blue square"])
+    [image] = (out / "test").glob("*.png")
+    assert image.with_suffix(".run.json").is_file()
+
+
+# --- error output and the error log ---
+
+from limner.core import errorlog
+from limner.core.writeonce import WriteOnceError
+
+
+def _logged(log):
+    return [json.loads(line) for line in log.read_text().splitlines()]
+
+
+def test_a_refusal_prints_on_standard_error_only_and_is_logged(isolated_error_log, capsys):
+    with pytest.raises(SystemExit) as exc:
+        _run(["--provider", "composite", "p"], MagicMock())
+    assert exc.value.code == 1
+    captured = capsys.readouterr()
+    assert captured.out == "" and captured.err.startswith("Error: ")
+    [entry] = _logged(isolated_error_log)
+    assert (entry["mode"], entry["error_type"], entry["exit_code"]) == ("plain", "Refusal", 1)
+    assert "reference image" in entry["message"] and "prompt" not in entry
+
+
+def test_a_failed_test_mode_run_logs_mode_test(isolated_error_log, tmp_path):
+    with pytest.raises(SystemExit):
+        _run_test_mode(["--output-dir", str(tmp_path / "out"), "--provider", "composite", "p"])
+    assert _logged(isolated_error_log)[0]["mode"] == "test"
+
+
+def test_a_successful_test_mode_run_writes_no_log_entry(isolated_error_log, tmp_path):
+    _run_test_mode(["--output-dir", str(tmp_path / "out"), "p"])
+    assert not isolated_error_log.exists()
+
+
+def test_a_provider_failure_keeps_the_receipt_line_on_standard_output_and_logs_the_receipt(isolated_error_log, tmp_path, capsys):
+    f = _prompt_file(tmp_path)
+    with pytest.raises(SystemExit) as exc:
+        _run(["--file", str(f)], MagicMock(side_effect=RuntimeError("quota exceeded")))
+    assert exc.value.code == 1
+    captured = capsys.readouterr()
+    assert captured.err.startswith("Error: RuntimeError: quota exceeded")
+    assert "Receipt: " in captured.out and "Error" not in captured.out
+    [entry] = _logged(isolated_error_log)
+    assert (entry["mode"], entry["provider"], entry["error_type"]) == ("plain", "gemini", "RuntimeError")
+    assert entry["receipt"].endswith(".run.json") and entry["job_id"]
+
+
+def test_a_failed_receipt_write_after_a_provider_failure_logs_two_entries(isolated_error_log, tmp_path, capsys):
+    f = _prompt_file(tmp_path)
+    with patch("limner.generate_logo.write_receipt", side_effect=WriteOnceError("disk full")):
+        with pytest.raises(SystemExit) as exc:
+            _run(["--file", str(f)], MagicMock(side_effect=RuntimeError("quota exceeded")))
+    assert exc.value.code == 1
+    captured = capsys.readouterr()
+    assert "Receipt:" not in captured.out
+    assert [line for line in captured.err.splitlines() if line.startswith("Error: ")] == [
+        "Error: RuntimeError: quota exceeded", "Error: disk full"]
+    first, second = _logged(isolated_error_log)
+    assert first["receipt"] is None and "quota exceeded" in first["message"]
+    assert (second["error_type"], second["message"]) == ("WriteOnceError", "disk full")
+
+
+def test_an_unexpected_exception_prints_one_error_line_logs_it_and_exits_1(isolated_error_log, monkeypatch, capsys):
+    def explode(args):
+        raise KeyError("boom")
+    monkeypatch.setattr("limner.generate_logo.resolve_config", explode)
+    with pytest.raises(SystemExit) as exc:
+        _run(["p"], MagicMock())
+    assert exc.value.code == 1
+    err = capsys.readouterr().err
+    assert err == "Error: KeyError: 'boom'\n" and "Traceback" not in err
+    [entry] = _logged(isolated_error_log)
+    assert entry["error_type"] == "KeyError" and entry["where"].startswith("test_cli.py:")
+
+
+def test_main_clears_the_remembered_fields_at_entry(isolated_error_log):
+    errorlog.note(job_id="stale")
+    with pytest.raises(SystemExit):
+        _run(["--provider", "composite", "p"], MagicMock())
+    assert _logged(isolated_error_log)[0]["job_id"] is None
+
+
+# --- gaps found by the counter-checks (U2c, U7) ---
+
+def _main_with(argv):
+    with patch.object(sys, "argv", ["limner-generate", *argv]), \
+         patch("limner.generate_logo.resolve_provider", side_effect=AssertionError("provider resolved")):
+        with pytest.raises(SystemExit) as exc:
+            main()
+    return exc.value.code
+
+
+@pytest.mark.parametrize("provider, ratio", [("gemini", "wide"), ("gemini", "0:9"), ("fal", "7:5"), ("openai", "16:9")])
+def test_test_mode_refuses_a_bad_aspect_ratio_and_writes_nothing(provider, ratio, tmp_path, monkeypatch, capsys):
+    _no_keys(monkeypatch)
+    out = tmp_path / "out"
+    assert _main_with(["--test", "--provider", provider, "-a", ratio, "--output-dir", str(out), "p"]) == 1
+    assert capsys.readouterr().err.startswith("Error: ")
+    assert not out.exists()
+
+
+@pytest.mark.parametrize("flags", [["--test"], []])
+def test_a_missing_prompt_file_exits_1_and_writes_nothing(flags, tmp_path, monkeypatch, capsys):
+    _no_keys(monkeypatch)
+    out = tmp_path / "out"
+    assert _main_with([*flags, "--file", str(tmp_path / "missing.txt"), "--output-dir", str(out)]) == 1
+    assert "prompt file not found" in capsys.readouterr().err
+    assert list(tmp_path.iterdir()) == []
+
+
+def test_a_live_refusal_into_the_test_root_comes_before_the_key_check(tmp_path, monkeypatch, capsys):
+    _no_keys(monkeypatch)
+    out = tmp_path / "out"
+    inside = out / "test" / "sub"
+    inside.mkdir(parents=True)
+    f = _prompt_file(inside)
+    assert _main_with(["--file", str(f), "--output-dir", str(out)]) == 1
+    err = capsys.readouterr().err
+    assert "test folder" in err and "is not set" not in err
+
+
+def test_test_mode_prints_the_notice_and_both_paths(tmp_path, monkeypatch, capsys):
+    _no_keys(monkeypatch)
+    out = tmp_path / "out"
+    _run_test_mode(["--output-dir", str(out), "A blue square"])
+    [image] = (out / "test").glob("*.png")
+    assert capsys.readouterr().out.splitlines() == [
+        "Test run: no provider was called and nothing was charged.",
+        f"Saved: {image}",
+        f"Receipt: {image.with_suffix('.run.json')}",
+    ]
+
+
+def test_a_test_receipt_records_each_reference_with_its_hash(tmp_path, monkeypatch):
+    from limner.core.receipt import sha256_file
+    _no_keys(monkeypatch)
+    ref = _reference(tmp_path)
+    out = tmp_path / "out"
+    _run_test_mode(["--provider", "fal", "--image", str(ref), "--output-dir", str(out), "p"])
+    [image] = (out / "test").glob("*.png")
+    receipt = json.loads(image.with_suffix(".run.json").read_text())
+    assert receipt["references"] == [{"stored": str(ref), "sha256": sha256_file(ref)}]
+
+
+def test_a_usage_error_exits_2_and_is_not_logged(isolated_error_log, capsys):
+    with patch.object(sys, "argv", ["limner-generate"]):
+        with pytest.raises(SystemExit) as exc:
+            main()
+    assert exc.value.code == 2
+    assert "Provide a prompt" in capsys.readouterr().err
+    assert not isolated_error_log.exists()
+
+
+def test_a_successful_live_run_writes_no_log_entry(isolated_error_log, tmp_path):
+    f = _prompt_file(tmp_path)
+    _run(["--file", str(f)], MagicMock(return_value=ProviderResult(image=b"PNG")))
+    assert not isolated_error_log.exists()
+
+
+def test_a_plain_mode_failure_logs_a_null_store(isolated_error_log, tmp_path):
+    f = _prompt_file(tmp_path)
+    with pytest.raises(SystemExit):
+        _run(["--file", str(f)], MagicMock(side_effect=RuntimeError("down")))
+    assert _logged(isolated_error_log)[0]["store"] is None
+
+
+def test_test_mode_refuses_an_unknown_header_provider_and_writes_nothing(tmp_path, monkeypatch, capsys):
+    _no_keys(monkeypatch)
+    f = tmp_path / "v01.txt"
+    f.write_text("# provider: dalle\n---\nA blue square")
+    out = tmp_path / "out"
+    assert _main_with(["--test", "--file", str(f), "--output-dir", str(out)]) == 1
+    assert capsys.readouterr().err.startswith("Error: ")
+    assert not out.exists() and [p.name for p in tmp_path.iterdir()] == ["v01.txt"]

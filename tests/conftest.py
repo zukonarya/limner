@@ -1,6 +1,8 @@
 import pytest
 from pathlib import Path
 
+from limner.core import config, errorlog
+
 
 @pytest.fixture(autouse=True)
 def isolated_store_root(tmp_path, monkeypatch):
@@ -8,6 +10,18 @@ def isolated_store_root(tmp_path, monkeypatch):
     root = tmp_path / "live-store"
     monkeypatch.setenv("LIMNER_STORE_DIR", str(root))
     return root
+
+
+@pytest.fixture(autouse=True)
+def isolated_error_log(tmp_path_factory, monkeypatch):
+    """Keeps every test away from the real ~/Library/Logs/Limner and clears the remembered job fields.
+
+    The log sits beside, not inside, the test's own tmp_path so tests that list that folder see no extra entry.
+    """
+    log = tmp_path_factory.mktemp("error-log") / "errors.log"
+    monkeypatch.setattr(config, "resolve_log_file", lambda: log)
+    errorlog.reset()
+    return log
 
 
 @pytest.fixture

@@ -2,7 +2,7 @@ import os
 from pathlib import Path
 
 import limner.core.config as config
-from limner.core.config import load_keys, resolve_env_file, resolve_output_dir
+from limner.core.config import load_keys, resolve_env_file, resolve_log_file, resolve_output_dir
 
 
 def test_explicit_override_wins_over_env_and_default(tmp_path, monkeypatch):
@@ -181,3 +181,14 @@ def test_load_keys_with_no_known_key_file_returns_none_and_prints_nothing(monkey
     monkeypatch.setattr(config, "resolve_env_file", lambda: None)
     assert load_keys() is None
     assert capsys.readouterr() == ("", "")
+
+
+# --- log file ---
+# resolve_log_file is imported at the top of this module, so the autouse fixture that replaces the
+# attribute on limner.core.config does not affect the real function tested here.
+
+def test_resolve_log_file_is_under_the_home_library_logs_whatever_the_cwd(tmp_path, monkeypatch):
+    before = resolve_log_file()
+    monkeypatch.chdir(tmp_path)
+    assert resolve_log_file() == before
+    assert before == Path.home() / "Library" / "Logs" / "Limner" / "errors.log"

@@ -2,6 +2,8 @@ import io
 import subprocess
 import sys
 
+from unittest.mock import patch
+
 import pytest
 from PIL import Image
 
@@ -34,3 +36,11 @@ def test_aspect_module_imports_no_provider_sdk():
     )
     out = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True, check=True)
     assert out.stdout.strip() == "False"
+
+
+def test_the_placeholder_is_marked_with_the_word_test_and_the_provider():
+    with patch("limner.core.placeholder.ImageDraw.Draw") as draw:
+        render_placeholder("fal")
+    assert draw.return_value.text.call_args.args[1] == "TEST fal"
+    marked = Image.open(io.BytesIO(render_placeholder("fal")))
+    assert any(low != high for low, high in marked.getextrema())

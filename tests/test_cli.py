@@ -610,6 +610,8 @@ def test_test_mode_fal_with_ratio_imports_no_provider_module(tmp_path):
         "print('LEAK' if {'limner.providers.fal', 'fal_client'} & set(sys.modules) else 'CLEAN')"
     )
     env = {k: v for k, v in os.environ.items() if k not in KEY_VARS}
+    # The child has no test fixture, so a stray failure would otherwise write to the real ~/Library/Logs/Limner.
+    env["HOME"] = str(tmp_path / "home")
     run = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True, env=env, cwd=tmp_path)
     assert run.returncode == 0, run.stdout + run.stderr
     assert run.stdout.strip().endswith("CLEAN")
@@ -757,3 +759,97 @@ def test_main_clears_the_remembered_fields_at_entry(isolated_error_log):
     with pytest.raises(SystemExit):
         _run(["--provider", "composite", "p"], MagicMock())
     assert _logged(isolated_error_log)[0]["job_id"] is None
+
+
+# --- gaps found by the counter-checks (U2c, U7) ---
+
+def _main_with(argv):
+    with patch.object(sys, "argv", ["limner-generate", *argv]), \
+         patch("limner.generate_logo.resolve_provider", side_effect=AssertionError("provider resolved")):
+        with pytest.raises(SystemExit) as exc:
+            main()
+    return exc.value.code
+
+
+@pytest.mark.parametrize("provider, ratio", [("gemini", "wide"), ("gemini", "0:9"), ("fal", "7:5"), ("openai", "16:9")])
+def test_test_mode_refuses_a_bad_aspect_ratio_and_writes_nothing(provider, ratio, tmp_path, monkeypatch, capsys):
+    _no_keys(monkeypatch)
+    out = tmp_path / "out"
+    assert _main_with(["--test", "--provider", provider, "-a", ratio, "--output-dir", str(out), "p"]) == 1
+    assert capsys.readouterr().err.startswith("Error: ")
+    assert not out.exists()
+
+
+@pytest.mark.parametrize("flags", [["--test"], []])
+def test_a_missing_prompt_file_exits_1_and_writes_nothing(flags, tmp_path, monkeypatch, capsys):
+    _no_keys(monkeypatch)
+    out = tmp_path / "out"
+    assert _main_with([*flags, "--file", str(tmp_path / "missing.txt"), "--output-dir", str(out)]) == 1
+    assert "prompt file not found" in capsys.readouterr().err
+    assert list(tmp_path.iterdir()) == []
+
+
+def test_a_live_refusal_into_the_test_root_comes_before_the_key_check(tmp_path, monkeypatch, capsys):
+    _no_keys(monkeypatch)
+    out = tmp_path / "out"
+    inside = out / "test" / "sub"
+    inside.mkdir(parents=True)
+    f = _prompt_file(inside)
+    assert _main_with(["--file", str(f), "--output-dir", str(out)]) == 1
+    err = capsys.readouterr().err
+    assert "test folder" in err and "is not set" not in err
+
+
+def test_test_mode_prints_the_notice_and_both_paths(tmp_path, monkeypatch, capsys):
+    _no_keys(monkeypatch)
+    out = tmp_path / "out"
+    _run_test_mode(["--output-dir", str(out), "A blue square"])
+    [image] = (out / "test").glob("*.png")
+    assert capsys.readouterr().out.splitlines() == [
+        "Test run: no provider was called and nothing was charged.",
+        f"Saved: {image}",
+        f"Receipt: {image.with_suffix('.run.json')}",
+    ]
+
+
+def test_a_test_receipt_records_each_reference_with_its_hash(tmp_path, monkeypatch):
+    from limner.core.receipt import sha256_file
+    _no_keys(monkeypatch)
+    ref = _reference(tmp_path)
+    out = tmp_path / "out"
+    _run_test_mode(["--provider", "fal", "--image", str(ref), "--output-dir", str(out), "p"])
+    [image] = (out / "test").glob("*.png")
+    receipt = json.loads(image.with_suffix(".run.json").read_text())
+    assert receipt["references"] == [{"stored": str(ref), "sha256": sha256_file(ref)}]
+
+
+def test_a_usage_error_exits_2_and_is_not_logged(isolated_error_log, capsys):
+    with patch.object(sys, "argv", ["limner-generate"]):
+        with pytest.raises(SystemExit) as exc:
+            main()
+    assert exc.value.code == 2
+    assert "Provide a prompt" in capsys.readouterr().err
+    assert not isolated_error_log.exists()
+
+
+def test_a_successful_live_run_writes_no_log_entry(isolated_error_log, tmp_path):
+    f = _prompt_file(tmp_path)
+    _run(["--file", str(f)], MagicMock(return_value=ProviderResult(image=b"PNG")))
+    assert not isolated_error_log.exists()
+
+
+def test_a_plain_mode_failure_logs_a_null_store(isolated_error_log, tmp_path):
+    f = _prompt_file(tmp_path)
+    with pytest.raises(SystemExit):
+        _run(["--file", str(f)], MagicMock(side_effect=RuntimeError("down")))
+    assert _logged(isolated_error_log)[0]["store"] is None
+
+
+def test_test_mode_refuses_an_unknown_header_provider_and_writes_nothing(tmp_path, monkeypatch, capsys):
+    _no_keys(monkeypatch)
+    f = tmp_path / "v01.txt"
+    f.write_text("# provider: dalle\n---\nA blue square")
+    out = tmp_path / "out"
+    assert _main_with(["--test", "--file", str(f), "--output-dir", str(out)]) == 1
+    assert capsys.readouterr().err.startswith("Error: ")
+    assert not out.exists() and [p.name for p in tmp_path.iterdir()] == ["v01.txt"]
